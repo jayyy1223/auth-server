@@ -21,16 +21,31 @@ const users = {
 
 const licenses = {
     // Format: license_key: { valid: true, used: false, hwid: null, expiry: null }
+    // Add your license keys here:
     'LICENSE-KEY-12345': {
         valid: true,
         used: false,
         hwid: null,
         expiry: null // null = never expires
-    }
+    },
+    // Add more license keys below:
+    // 'YOUR-LICENSE-KEY-1': {
+    //     valid: true,
+    //     used: false,
+    //     hwid: null,
+    //     expiry: null
+    // },
+    // 'YOUR-LICENSE-KEY-2': {
+    //     valid: true,
+    //     used: false,
+    //     hwid: null,
+    //     expiry: null
+    // }
 };
 
 // Application secret (keep this secure!)
-const APP_SECRET = 'your-secret-key-here';
+// IMPORTANT: Change this to a secure random string!
+const APP_SECRET = 'ABCJDWQ91D9219D21JKWDDKQAD912Q';
 
 // Middleware to validate app secret
 function validateAppSecret(req, res, next) {
@@ -137,6 +152,52 @@ app.post('/auth/session', validateAppSecret, (req, res) => {
     });
 });
 
+// License Key Generator Endpoint (Admin only - add authentication in production!)
+app.post('/auth/generate-key', validateAppSecret, (req, res) => {
+    const { count = 1, prefix = 'LICENSE' } = req.body;
+    
+    const generatedKeys = [];
+    
+    for (let i = 0; i < count; i++) {
+        // Generate a random license key
+        const randomPart = crypto.randomBytes(8).toString('hex').toUpperCase();
+        const licenseKey = `${prefix}-${randomPart}`;
+        
+        // Add to licenses object
+        licenses[licenseKey] = {
+            valid: true,
+            used: false,
+            hwid: null,
+            expiry: null
+        };
+        
+        generatedKeys.push(licenseKey);
+    }
+    
+    res.json({
+        success: true,
+        keys: generatedKeys,
+        message: `Generated ${count} license key(s)`
+    });
+});
+
+// List all license keys (Admin only - use POST with app_secret in body)
+app.post('/auth/list-keys', validateAppSecret, (req, res) => {
+    const keysList = Object.keys(licenses).map(key => ({
+        key: key,
+        valid: licenses[key].valid,
+        used: licenses[key].used,
+        hwid: licenses[key].hwid,
+        expiry: licenses[key].expiry
+    }));
+    
+    res.json({
+        success: true,
+        total: keysList.length,
+        keys: keysList
+    });
+});
+
 // Health check
 app.get('/', (req, res) => {
     res.json({ status: 'Auth server running' });
@@ -146,4 +207,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Authentication server running on port ${PORT}`);
 });
-
