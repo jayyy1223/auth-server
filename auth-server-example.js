@@ -5,6 +5,80 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const crypto = require('crypto');
 const app = express();
+// Quick local test server to verify CORS fix works
+// Run: node test-server-local.js
+// Then open license-key-generator.html in browser and change API endpoint to: http://localhost:3000/auth/generate-key
+
+const express = require('express');
+const bodyParser = require('body-parser');
+const crypto = require('crypto');
+const app = express();
+
+// Enable CORS for all routes
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    
+    next();
+});
+
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
+
+const APP_SECRET = 'ABCJDWQ91D9219D21JKWDDKQAD912Q';
+
+function validateAppSecret(req, res, next) {
+    const appSecret = req.body.app_secret || req.body.app_secret;
+    if (appSecret !== APP_SECRET) {
+        return res.json({ success: false, message: 'Invalid application secret' });
+    }
+    next();
+}
+
+const licenses = {};
+
+// License Key Generator Endpoint
+app.post('/auth/generate-key', validateAppSecret, (req, res) => {
+    const { count = 1, prefix = 'LICENSE' } = req.body;
+    
+    const generatedKeys = [];
+    
+    for (let i = 0; i < count; i++) {
+        const randomPart = crypto.randomBytes(8).toString('hex').toUpperCase();
+        const licenseKey = `${prefix}-${randomPart}`;
+        
+        licenses[licenseKey] = {
+            valid: true,
+            used: false,
+            hwid: null,
+            expiry: null
+        };
+        
+        generatedKeys.push(licenseKey);
+    }
+    
+    res.json({
+        success: true,
+        keys: generatedKeys,
+        message: `Generated ${count} license key(s)`
+    });
+});
+
+app.get('/', (req, res) => {
+    res.json({ status: 'Test server running - CORS enabled' });
+});
+
+const PORT = 3000;
+app.listen(PORT, () => {
+    console.log(`\n✅ Test server running on http://localhost:${PORT}`);
+    console.log(`📝 Update your HTML file API endpoint to: http://localhost:${PORT}/auth/generate-key\n`);
+});
+
 
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
@@ -207,3 +281,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Authentication server running on port ${PORT}`);
 });
+
