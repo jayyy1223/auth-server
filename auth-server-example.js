@@ -57,6 +57,10 @@ const licenses = {
     // }
 };
 
+// Blacklist storage (HWID and IP addresses)
+const blacklistedHWIDs = [];
+const blacklistedIPs = [];
+
 // Application secret (keep this secure!)
 // IMPORTANT: Change this to a secure random string!
 const APP_SECRET = 'ABCJDWQ91D9219D21JKWDDKQAD912Q';
@@ -73,6 +77,28 @@ function validateAppSecret(req, res, next) {
 // License validation endpoint
 app.post('/auth/license', validateAppSecret, (req, res) => {
     const { license_key, hwid, app_name } = req.body;
+    
+    // Get client IP address
+    const clientIP = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const cleanIP = clientIP ? clientIP.split(',')[0].trim() : 'unknown';
+    
+    // Check if HWID is blacklisted
+    if (hwid && blacklistedHWIDs.includes(hwid)) {
+        return res.json({ 
+            success: false, 
+            message: 'Blacklisted user detected',
+            blacklisted: true 
+        });
+    }
+    
+    // Check if IP is blacklisted
+    if (blacklistedIPs.includes(cleanIP)) {
+        return res.json({ 
+            success: false, 
+            message: 'Blacklisted user detected',
+            blacklisted: true 
+        });
+    }
     
     if (!license_key) {
         return res.json({ success: false, message: 'License key required' });
@@ -286,6 +312,89 @@ app.post('/auth/delete-key', validateAppSecret, (req, res) => {
         success: true,
         message: 'License key deleted successfully',
         license_key: license_key
+    });
+});
+
+// Blacklist HWID or IP (Admin only)
+app.post('/auth/blacklist', validateAppSecret, (req, res) => {
+    const { hwid, ip } = req.body;
+    
+    if (!hwid && !ip) {
+        return res.json({ success: false, message: 'HWID or IP address required' });
+    }
+    
+    let added = [];
+    
+    if (hwid && !blacklistedHWIDs.includes(hwid)) {
+        blacklistedHWIDs.push(hwid);
+        added.push(`HWID: ${hwid}`);
+    }
+    
+    if (ip && !blacklistedIPs.includes(ip)) {
+        blacklistedIPs.push(ip);
+        added.push(`IP: ${ip}`);
+    }
+    
+    if (added.length === 0) {
+        return res.json({ 
+            success: false, 
+            message: 'HWID or IP already blacklisted' 
+        });
+    }
+    
+    res.json({
+        success: true,
+        message: `Blacklisted: ${added.join(', ')}`,
+        blacklistedHWIDs: blacklistedHWIDs,
+        blacklistedIPs: blacklistedIPs
+    });
+});
+
+// List blacklisted HWIDs and IPs (Admin only)
+app.post('/auth/list-blacklist', validateAppSecret, (req, res) => {
+    res.json({
+        success: true,
+        blacklistedHWIDs: blacklistedHWIDs,
+        blacklistedIPs: blacklistedIPs
+    });
+});
+
+// Remove from blacklist (Admin only)
+app.post('/auth/unblacklist', validateAppSecret, (req, res) => {
+    const { hwid, ip } = req.body;
+    
+    if (!hwid && !ip) {
+        return res.json({ success: false, message: 'HWID or IP address required' });
+    }
+    
+    let removed = [];
+    
+    if (hwid) {
+        const index = blacklistedHWIDs.indexOf(hwid);
+        if (index > -1) {
+            blacklistedHWIDs.splice(index, 1);
+            removed.push(`HWID: ${hwid}`);
+        }
+    }
+    
+    if (ip) {
+        const index = blacklistedIPs.indexOf(ip);
+        if (index > -1) {
+            blacklistedIPs.splice(index, 1);
+            removed.push(`IP: ${ip}`);
+        }
+    }
+    
+    if (removed.length === 0) {
+        return res.json({ 
+            success: false, 
+            message: 'HWID or IP not found in blacklist' 
+        });
+    }
+    
+    res.json({
+        success: true,
+        message: `Removed from blacklist: ${removed.join(', ')}`
     });
 });
 
