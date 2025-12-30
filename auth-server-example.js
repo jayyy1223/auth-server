@@ -208,91 +208,101 @@ function validateAppSecret(req, res, next) {
 
 // License validation endpoint
 app.post('/auth/license', validateAppSecret, (req, res) => {
-    const { license_key, hwid, app_name } = req.body;
-    
-    // Get client IP address
-    const clientIP = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    const cleanIP = clientIP ? clientIP.split(',')[0].trim() : 'unknown';
-    
-    // Check if HWID is blacklisted
-    if (hwid && blacklistedHWIDs.includes(hwid)) {
-        return res.json({ 
-            success: false, 
-            message: 'Blacklisted user detected',
-            blacklisted: true 
-        });
-    }
-    
-    // Check if IP is blacklisted
-    if (blacklistedIPs.includes(cleanIP)) {
-        return res.json({ 
-            success: false, 
-            message: 'Blacklisted user detected',
-            blacklisted: true 
-        });
-    }
-    
-    if (!license_key) {
-        return res.json({ success: false, message: 'License key required' });
-    }
-    
-    const license = licenses[license_key];
-    
-    if (!license || !license.valid) {
-        return res.json({ success: false, message: 'Invalid license key' });
-    }
-    
-    if (license.used && license.hwid !== hwid) {
-        return res.json({ success: false, message: 'License already used on different hardware' });
-    }
-    
-    // Check expiry
-    if (license.expiry && new Date() > new Date(license.expiry)) {
-        return res.json({ success: false, message: 'License has expired' });
-    }
-    
-    // Store system information from request
-    const systemInfo = {
-        hwid: hwid || null,
-        ip: cleanIP,
-        user_agent: req.headers['user-agent'] || 'unknown',
-        timestamp: new Date().toISOString(),
-        disk_serials: req.body.disk_serials || null,
-        baseboard_serial: req.body.baseboard_serial || null,
-        bios_serial: req.body.bios_serial || null,
-        processor_id: req.body.processor_id || null,
-        mac_addresses: req.body.mac_addresses || null,
-        volume_serials: req.body.volume_serials || null,
-        computer_name: req.body.computer_name || null,
-        username: req.body.username || null,
-        os_version: req.body.os_version || null,
-        os_architecture: req.body.os_architecture || null
-    };
+    try {
+        const { license_key, hwid, app_name } = req.body;
+        
+        // Get client IP address
+        const clientIP = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        const cleanIP = clientIP ? clientIP.split(',')[0].trim() : 'unknown';
+        
+        // Check if HWID is blacklisted
+        if (hwid && blacklistedHWIDs.includes(hwid)) {
+            return res.json({ 
+                success: false, 
+                message: 'Blacklisted user detected',
+                blacklisted: true 
+            });
+        }
+        
+        // Check if IP is blacklisted
+        if (blacklistedIPs.includes(cleanIP)) {
+            return res.json({ 
+                success: false, 
+                message: 'Blacklisted user detected',
+                blacklisted: true 
+            });
+        }
+        
+        if (!license_key) {
+            return res.json({ success: false, message: 'License key required' });
+        }
+        
+        const license = licenses[license_key];
+        
+        if (!license || !license.valid) {
+            return res.json({ success: false, message: 'Invalid license key' });
+        }
+        
+        if (license.used && license.hwid && license.hwid !== hwid) {
+            return res.json({ success: false, message: 'License already used on different hardware' });
+        }
+        
+        // Check expiry
+        if (license.expiry && new Date() > new Date(license.expiry)) {
+            return res.json({ success: false, message: 'License has expired' });
+        }
+        
+        // Store system information from request (non-blocking - update in background)
+        const systemInfo = {
+            hwid: hwid || null,
+            ip: cleanIP,
+            user_agent: req.headers['user-agent'] || 'unknown',
+            timestamp: new Date().toISOString(),
+            disk_serials: req.body.disk_serials || null,
+            baseboard_serial: req.body.baseboard_serial || null,
+            bios_serial: req.body.bios_serial || null,
+            processor_id: req.body.processor_id || null,
+            mac_addresses: req.body.mac_addresses || null,
+            volume_serials: req.body.volume_serials || null,
+            computer_name: req.body.computer_name || null,
+            username: req.body.username || null,
+            os_version: req.body.os_version || null,
+            os_architecture: req.body.os_architecture || null
+        };
 
-    // Mark as used and bind to HWID and IP
-    if (!license.used) {
-        license.used = true;
-        license.hwid = hwid;
-        license.ip = cleanIP;
-        license.system_info = systemInfo;
-        license.first_used = new Date().toISOString();
-        license.last_used = new Date().toISOString();
-    } else {
-        // Update IP and system info if key is already used (in case IP changed or system info updated)
-        license.ip = cleanIP;
-        license.system_info = systemInfo;
-        license.last_used = new Date().toISOString();
+        // Mark as used and bind to HWID and IP (quick update)
+        if (!license.used) {
+            license.used = true;
+            license.hwid = hwid;
+            license.ip = cleanIP;
+            license.system_info = systemInfo;
+            license.first_used = new Date().toISOString();
+            license.last_used = new Date().toISOString();
+        } else {
+            // Update IP and system info if key is already used (in case IP changed or system info updated)
+            license.ip = cleanIP;
+            license.system_info = systemInfo;
+            license.last_used = new Date().toISOString();
+        }
+        
+        // Generate session token
+        const token = crypto.randomBytes(32).toString('hex');
+        
+        // Return response immediately (don't block)
+        res.json({
+            success: true,
+            valid: true,
+            token: token,
+            message: 'License validated successfully',
+            is_whitelisted: whitelistedLicenseKeys.includes(license_key)
+        });
+    } catch (error) {
+        console.error('Error in license validation:', error);
+        res.json({ 
+            success: false, 
+            message: 'Server error during license validation' 
+        });
     }
-    
-    // Generate session token
-    const token = crypto.randomBytes(32).toString('hex');
-    
-    res.json({
-        success: true,
-        valid: true,
-        token: token,
-        message: 'License validated successfully'
-    });
 });
 
 // Username/Password validation endpoint
@@ -361,16 +371,54 @@ app.post('/auth/login', validateAppSecret, (req, res) => {
 
 // Session validation endpoint
 app.post('/auth/session', validateAppSecret, (req, res) => {
-    const { token } = req.body;
-    
-    // In real implementation, store tokens and check them
-    // For now, just return success (you'd want to check if token is valid)
-    
-    res.json({
-        success: true,
-        valid: true,
-        message: 'Session valid'
-    });
+    try {
+        const { token, license_key } = req.body;
+        
+        // Quick validation - just check if token exists (non-blocking)
+        // In production, you'd want to store tokens and validate them properly
+        if (!token || token.length < 10) {
+            return res.json({
+                success: false,
+                valid: false,
+                message: 'Invalid session token'
+            });
+        }
+        
+        // If license key is provided, verify it's still valid
+        if (license_key) {
+            const license = licenses[license_key];
+            if (!license || !license.valid) {
+                return res.json({
+                    success: false,
+                    valid: false,
+                    message: 'License key is no longer valid'
+                });
+            }
+            
+            // Check expiry
+            if (license.expiry && new Date() > new Date(license.expiry)) {
+                return res.json({
+                    success: false,
+                    valid: false,
+                    message: 'License has expired'
+                });
+            }
+        }
+        
+        // Return success immediately (non-blocking)
+        res.json({
+            success: true,
+            valid: true,
+            message: 'Session valid'
+        });
+    } catch (error) {
+        console.error('Error in session validation:', error);
+        res.json({
+            success: false,
+            valid: false,
+            message: 'Server error during session validation'
+        });
+    }
 });
 
 // License Key Generator Endpoint (Admin only - add authentication in production!)
