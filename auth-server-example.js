@@ -4,32 +4,52 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const crypto = require('crypto');
-const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const app = express();
 
-// Ensure upload directories exist
-const uploadDir = path.join(__dirname, 'uploads', 'crack_screenshots');
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-}
+// Try to require multer, but handle if it's not installed
+let multer = null;
+let upload = null;
+let uploadDir = null;
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, uploadDir);
-    },
-    filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, 'crack_' + uniqueSuffix + path.extname(file.originalname || '.png'));
+try {
+    multer = require('multer');
+    
+    // Ensure upload directories exist
+    uploadDir = path.join(__dirname, 'uploads', 'crack_screenshots');
+    try {
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+    } catch (dirError) {
+        console.error('Error creating upload directory:', dirError);
+        // Use temp directory as fallback
+        uploadDir = require('os').tmpdir();
     }
-});
-
-const upload = multer({ 
-    storage: storage,
-    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
-});
+    
+    // Configure multer for file uploads
+    const storage = multer.diskStorage({
+        destination: function (req, file, cb) {
+            cb(null, uploadDir);
+        },
+        filename: function (req, file, cb) {
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+            cb(null, 'crack_' + uniqueSuffix + path.extname(file.originalname || '.png'));
+        }
+    });
+    
+    upload = multer({ 
+        storage: storage,
+        limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+    });
+    
+    console.log('Multer initialized successfully');
+} catch (multerError) {
+    console.error('Multer not available:', multerError.message);
+    console.log('File uploads will be disabled. Install multer: npm install multer');
+    // Server will continue without file upload support
+}
 
 // Enable CORS for all routes
 app.use((req, res, next) => {
@@ -648,7 +668,7 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
     // Check content type to determine if multipart
     const contentType = req.headers['content-type'] || '';
     
-    if (contentType.includes('multipart/form-data')) {
+    if (contentType.includes('multipart/form-data') && upload) {
         // Handle multipart with file upload - validate secret AFTER multer processes
         upload.single('screenshot')(req, res, (err) => {
             if (err) {
@@ -798,12 +818,22 @@ app.get('/auth/get-screenshot/:filename', (req, res) => {
     const filename = req.params.filename;
     // Sanitize filename to prevent directory traversal
     const safeFilename = path.basename(filename);
+    if (!uploadDir) {
+        return res.status(503).json({ success: false, message: 'File uploads not available' });
+    }
+    
     const filepath = path.join(uploadDir, safeFilename);
     
-    if (fs.existsSync(filepath)) {
-        res.sendFile(path.resolve(filepath));
-    } else {
-        res.status(404).json({ success: false, message: 'Screenshot not found' });
+    try {
+        if (fs.existsSync(filepath)) {
+            res.sendFile(path.resolve(filepath));
+        } else {
+            console.error('Screenshot not found:', filepath);
+            res.status(404).json({ success: false, message: 'Screenshot not found' });
+        }
+    } catch (error) {
+        console.error('Error serving screenshot:', error);
+        res.status(500).json({ success: false, message: 'Error serving screenshot' });
     }
 });
 
@@ -835,6 +865,11 @@ const PORT = process.env.PORT || 3000;
 try {
     app.listen(PORT, () => {
         console.log(`Authentication server running on port ${PORT}`);
+        if (!multer) {
+            console.log('WARNING: Multer not available. File uploads disabled. Install with: npm install multer');
+        } else {
+            console.log('File uploads enabled');
+        }
     });
 } catch (err) {
     console.error('Error starting server:', err);
@@ -844,9 +879,12 @@ try {
 // Handle uncaught errors
 process.on('uncaughtException', (err) => {
     console.error('Uncaught Exception:', err);
+    console.error('Stack:', err.stack);
+    // Don't exit - let Railway handle restarts
 });
 
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    // Don't exit - let Railway handle restarts
 });
 
