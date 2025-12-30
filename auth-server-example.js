@@ -612,6 +612,149 @@ app.post('/auth/unblacklist', validateAppSecret, (req, res) => {
     });
 });
 
+// Log crack attempt endpoint (Admin only) - supports both JSON and multipart/form-data
+app.post('/auth/log-crack-attempt', validateAppSecret, (req, res) => {
+    // Check if multipart/form-data (has file)
+    const multer = require('multer');
+    const upload = multer({ 
+        dest: 'uploads/crack_screenshots/',
+        limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+    });
+    
+    upload.single('screenshot')(req, res, (err) => {
+        if (err) {
+            // If multipart fails, try JSON
+            handleJsonCrackAttempt(req, res);
+            return;
+        }
+        
+        // Handle multipart request
+        const { attempt_number, reason, username, machine_name, timestamp, os_version, discord_id, discord_name, hwid, ip_address } = req.body;
+        const screenshotFile = req.file;
+        
+        // Initialize crack attempts array if it doesn't exist
+        if (!global.crackAttempts) {
+            global.crackAttempts = [];
+        }
+        
+        // Create log entry
+        const logEntry = {
+            attempt_number: parseInt(attempt_number) || 0,
+            reason: reason || 'Unknown',
+            username: username || 'Unknown',
+            machine_name: machine_name || 'Unknown',
+            timestamp: timestamp || new Date().toISOString(),
+            os_version: os_version || 'Unknown',
+            discord_id: discord_id || 'Not found',
+            discord_name: discord_name || 'Not found',
+            hwid: hwid || 'Unknown',
+            ip_address: ip_address || 'Unknown',
+            screenshot_filename: screenshotFile ? screenshotFile.filename : null,
+            screenshot_path: screenshotFile ? screenshotFile.path : null,
+            received_at: new Date().toISOString()
+        };
+        
+        // Add to array (keep last 1000 entries to prevent memory issues)
+        global.crackAttempts.push(logEntry);
+        if (global.crackAttempts.length > 1000) {
+            // Delete old screenshot file if exists
+            const oldEntry = global.crackAttempts.shift();
+            if (oldEntry.screenshot_path) {
+                try {
+                    const fs = require('fs');
+                    if (fs.existsSync(oldEntry.screenshot_path)) {
+                        fs.unlinkSync(oldEntry.screenshot_path);
+                    }
+                } catch (e) {}
+            }
+        }
+        
+        res.json({
+            success: true,
+            message: 'Crack attempt logged successfully',
+            log_entry: logEntry
+        });
+    });
+});
+
+// Handle JSON-only crack attempt (fallback)
+function handleJsonCrackAttempt(req, res) {
+    const { attempt_number, reason, username, machine_name, timestamp, os_version, discord_id, discord_name, hwid, ip_address } = req.body;
+    
+    // Initialize crack attempts array if it doesn't exist
+    if (!global.crackAttempts) {
+        global.crackAttempts = [];
+    }
+    
+    // Create log entry
+    const logEntry = {
+        attempt_number: parseInt(attempt_number) || 0,
+        reason: reason || 'Unknown',
+        username: username || 'Unknown',
+        machine_name: machine_name || 'Unknown',
+        timestamp: timestamp || new Date().toISOString(),
+        os_version: os_version || 'Unknown',
+        discord_id: discord_id || 'Not found',
+        discord_name: discord_name || 'Not found',
+        hwid: hwid || 'Unknown',
+        ip_address: ip_address || 'Unknown',
+        screenshot_filename: null,
+        screenshot_path: null,
+        received_at: new Date().toISOString()
+    };
+    
+    // Add to array (keep last 1000 entries to prevent memory issues)
+    global.crackAttempts.push(logEntry);
+    if (global.crackAttempts.length > 1000) {
+        global.crackAttempts.shift(); // Remove oldest entry
+    }
+    
+    res.json({
+        success: true,
+        message: 'Crack attempt logged successfully',
+        log_entry: logEntry
+    });
+}
+
+// Get crack attempt logs (Admin only)
+app.post('/auth/get-crack-logs', validateAppSecret, (req, res) => {
+    const { limit = 100 } = req.body;
+    
+    if (!global.crackAttempts) {
+        global.crackAttempts = [];
+    }
+    
+    // Return most recent entries with screenshot URLs
+    const logs = global.crackAttempts.slice(-limit).reverse().map(log => {
+        const logCopy = { ...log };
+        if (log.screenshot_filename) {
+            // Generate URL to access screenshot
+            logCopy.screenshot_url = `/auth/get-screenshot/${log.screenshot_filename}`;
+        }
+        return logCopy;
+    });
+    
+    res.json({
+        success: true,
+        total: global.crackAttempts.length,
+        logs: logs
+    });
+});
+
+// Get screenshot file (Admin only) - no auth needed for GET (or add auth if preferred)
+app.get('/auth/get-screenshot/:filename', (req, res) => {
+    const filename = req.params.filename;
+    // Sanitize filename to prevent directory traversal
+    const safeFilename = path.basename(filename);
+    const filepath = path.join(uploadDir, safeFilename);
+    
+    if (fs.existsSync(filepath)) {
+        res.sendFile(filepath);
+    } else {
+        res.status(404).json({ success: false, message: 'Screenshot not found' });
+    }
+});
+
 // Health check
 app.get('/', (req, res) => {
     res.json({ status: 'Auth server running' });
