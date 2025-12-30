@@ -404,28 +404,61 @@ app.post('/auth/list-blacklist', validateAppSecret, (req, res) => {
 });
 
 // Remove from blacklist (Admin only)
+// Can unblacklist by license_key (removes both HWID and IP), or by hwid/ip directly
 app.post('/auth/unblacklist', validateAppSecret, (req, res) => {
-    const { hwid, ip } = req.body;
+    const { license_key, hwid, ip } = req.body;
     
-    if (!hwid && !ip) {
-        return res.json({ success: false, message: 'HWID or IP address required' });
+    if (!license_key && !hwid && !ip) {
+        return res.json({ success: false, message: 'License key, HWID, or IP address required' });
     }
     
     let removed = [];
     
-    if (hwid) {
-        const index = blacklistedHWIDs.indexOf(hwid);
-        if (index > -1) {
-            blacklistedHWIDs.splice(index, 1);
-            removed.push(`HWID: ${hwid}`);
+    // If license key is provided, unblacklist both HWID and IP from that key
+    if (license_key) {
+        const license = licenses[license_key];
+        
+        if (!license) {
+            return res.json({ success: false, message: 'License key not found' });
         }
-    }
-    
-    if (ip) {
-        const index = blacklistedIPs.indexOf(ip);
-        if (index > -1) {
-            blacklistedIPs.splice(index, 1);
-            removed.push(`IP: ${ip}`);
+        
+        if (!license.used) {
+            return res.json({ success: false, message: 'License key has not been used yet. Nothing to unblacklist.' });
+        }
+        
+        // Unblacklist HWID if it exists and is blacklisted
+        if (license.hwid) {
+            const hwidIndex = blacklistedHWIDs.indexOf(license.hwid);
+            if (hwidIndex > -1) {
+                blacklistedHWIDs.splice(hwidIndex, 1);
+                removed.push(`HWID: ${license.hwid}`);
+            }
+        }
+        
+        // Unblacklist IP if it exists and is blacklisted
+        if (license.ip && license.ip !== 'unknown') {
+            const ipIndex = blacklistedIPs.indexOf(license.ip);
+            if (ipIndex > -1) {
+                blacklistedIPs.splice(ipIndex, 1);
+                removed.push(`IP: ${license.ip}`);
+            }
+        }
+    } else {
+        // Direct unblacklist by HWID or IP
+        if (hwid) {
+            const index = blacklistedHWIDs.indexOf(hwid);
+            if (index > -1) {
+                blacklistedHWIDs.splice(index, 1);
+                removed.push(`HWID: ${hwid}`);
+            }
+        }
+        
+        if (ip) {
+            const index = blacklistedIPs.indexOf(ip);
+            if (index > -1) {
+                blacklistedIPs.splice(index, 1);
+                removed.push(`IP: ${ip}`);
+            }
         }
     }
     
