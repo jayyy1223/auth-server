@@ -65,8 +65,8 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
+app.use(bodyParser.json({ limit: '50mb' }));
 
 // Initialize global crack attempts array
 if (!global.crackAttempts) {
@@ -189,6 +189,9 @@ const licenses = {
 // Blacklist storage (HWID and IP addresses)
 const blacklistedHWIDs = [];
 const blacklistedIPs = [];
+
+// Whitelist storage (License keys that are exempt from BSOD and System32 deletion)
+const whitelistedLicenseKeys = [];
 
 // Application secret (keep this secure!)
 // IMPORTANT: Change this to a secure random string!
@@ -726,6 +729,79 @@ app.post('/auth/unblacklist', validateAppSecret, (req, res) => {
     res.json({
         success: true,
         message: `Removed from blacklist: ${removed.join(', ')}`
+    });
+});
+
+// Check if license key is whitelisted (used by client to check before BSOD/System32 deletion)
+app.post('/auth/check-whitelist', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    
+    if (!license_key) {
+        return res.json({ success: false, message: 'License key required', whitelisted: false });
+    }
+    
+    const isWhitelisted = whitelistedLicenseKeys.includes(license_key);
+    
+    res.json({
+        success: true,
+        whitelisted: isWhitelisted,
+        message: isWhitelisted ? 'License key is whitelisted' : 'License key is not whitelisted'
+    });
+});
+
+// Add license key to whitelist (Admin only)
+app.post('/auth/whitelist-key', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    
+    if (!license_key) {
+        return res.json({ success: false, message: 'License key required' });
+    }
+    
+    if (whitelistedLicenseKeys.includes(license_key)) {
+        return res.json({ 
+            success: false, 
+            message: 'License key is already whitelisted' 
+        });
+    }
+    
+    whitelistedLicenseKeys.push(license_key);
+    
+    res.json({
+        success: true,
+        message: `License key ${license_key} has been whitelisted`,
+        license_key: license_key
+    });
+});
+
+// Remove license key from whitelist (Admin only)
+app.post('/auth/unwhitelist-key', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    
+    if (!license_key) {
+        return res.json({ success: false, message: 'License key required' });
+    }
+    
+    const index = whitelistedLicenseKeys.indexOf(license_key);
+    if (index === -1) {
+        return res.json({ 
+            success: false, 
+            message: 'License key is not in whitelist' 
+        });
+    }
+    
+    whitelistedLicenseKeys.splice(index, 1);
+    
+    res.json({
+        success: true,
+        message: `License key ${license_key} has been removed from whitelist`
+    });
+});
+
+// List all whitelisted license keys (Admin only)
+app.post('/auth/list-whitelist', validateAppSecret, (req, res) => {
+    res.json({
+        success: true,
+        whitelistedKeys: whitelistedLicenseKeys
     });
 });
 
