@@ -74,6 +74,72 @@ if (!global.crackAttempts) {
     console.log('Initialized global.crackAttempts array');
 }
 
+// File-based persistence for crack logs
+const CRACK_LOGS_FILE = path.join(__dirname, 'crack_logs.json');
+
+// Load crack logs from file on startup
+function loadCrackLogsFromFile() {
+    try {
+        if (fs.existsSync(CRACK_LOGS_FILE)) {
+            const data = fs.readFileSync(CRACK_LOGS_FILE, 'utf8');
+            if (data && data.trim().length > 0) {
+                const logs = JSON.parse(data);
+                if (Array.isArray(logs)) {
+                    global.crackAttempts = logs;
+                    console.log(`✅ Loaded ${logs.length} crack attempt logs from file`);
+                    return;
+                } else {
+                    console.warn('⚠️ Log file exists but data is not an array. Initializing empty array.');
+                }
+            } else {
+                console.warn('⚠️ Log file exists but is empty. Initializing empty array.');
+            }
+        } else {
+            console.log('ℹ️ No existing log file found. Starting with empty array.');
+        }
+    } catch (error) {
+        console.error('❌ Error loading crack logs from file:', error.message);
+        console.error('   This is normal on first run. Creating new log file.');
+    }
+    
+    // Ensure array is initialized
+    if (!global.crackAttempts || !Array.isArray(global.crackAttempts)) {
+        global.crackAttempts = [];
+    }
+}
+
+// Save crack logs to file
+function saveCrackLogsToFile() {
+    try {
+        if (global.crackAttempts && Array.isArray(global.crackAttempts)) {
+            // Create backup before writing
+            if (fs.existsSync(CRACK_LOGS_FILE)) {
+                try {
+                    fs.copyFileSync(CRACK_LOGS_FILE, CRACK_LOGS_FILE + '.backup');
+                } catch (backupError) {
+                    // Ignore backup errors
+                }
+            }
+            
+            // Write to file atomically
+            const tempFile = CRACK_LOGS_FILE + '.tmp';
+            fs.writeFileSync(tempFile, JSON.stringify(global.crackAttempts, null, 2), 'utf8');
+            fs.renameSync(tempFile, CRACK_LOGS_FILE);
+        }
+    } catch (error) {
+        console.error('❌ Error saving crack logs to file:', error.message);
+        console.error('   Logs are still stored in memory and will be saved on next attempt.');
+    }
+}
+
+// Load logs on startup
+loadCrackLogsFromFile();
+
+// Auto-save logs every 5 seconds
+setInterval(() => {
+    saveCrackLogsToFile();
+}, 5000);
+
 // In-memory database (replace with real database like MySQL, MongoDB, or SQLite)
 const users = {
     // Format: username: { password_hash, license_keys: [], hwid: null }
@@ -684,6 +750,7 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
             }
             
             console.log('Multer processed successfully');
+            console.log('Request body keys:', Object.keys(req.body));
             console.log('Request body:', JSON.stringify(req.body, null, 2));
             console.log('Request file:', req.file ? req.file.filename : 'None');
             
@@ -697,16 +764,34 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
                 return res.json({ success: false, message: 'Invalid application secret' });
             }
             
-            // Handle multipart request
-            const { attempt_number, reason, username, machine_name, timestamp, os_version, discord_id, discord_name, hwid, ip_address } = req.body;
+            // Handle multipart request - extract all fields including unique_id
+            const { 
+                attempt_number, 
+                reason, 
+                username, 
+                machine_name, 
+                timestamp, 
+                os_version, 
+                discord_id, 
+                discord_name, 
+                hwid, 
+                ip_address, 
+                unique_id,
+                unique_log_id  // Also check for unique_log_id (backward compatibility)
+            } = req.body;
+            
+            // Use unique_id or unique_log_id, whichever is available
+            const finalUniqueId = unique_id || unique_log_id;
+            console.log('Unique ID from request:', finalUniqueId);
             const screenshotFile = req.file;
             
             // Initialize crack attempts array if it doesn't exist
             if (!global.crackAttempts) {
                 global.crackAttempts = [];
+                loadCrackLogsFromFile();
             }
             
-            // Create log entry
+            // Create log entry with unique ID to prevent duplicates
             const logEntry = {
                 attempt_number: parseInt(attempt_number) || 0,
                 reason: reason || 'Unknown',
@@ -718,6 +803,7 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
                 discord_name: discord_name || 'Not found',
                 hwid: hwid || 'Unknown',
                 ip_address: ip_address || 'Unknown',
+                unique_id: finalUniqueId || `${attempt_number}_${Date.now()}_${Math.random().toString(36).substring(7)}`,
                 screenshot_filename: screenshotFile ? screenshotFile.filename : null,
                 screenshot_path: screenshotFile ? screenshotFile.path : null,
                 received_at: new Date().toISOString()
@@ -726,17 +812,25 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
             console.log('=== CRACK ATTEMPT LOG ENTRY ===');
             console.log(JSON.stringify(logEntry, null, 2));
             console.log('Screenshot file:', screenshotFile ? screenshotFile.filename : 'None');
+            console.log('Unique ID:', logEntry.unique_id);
             
-            // Add to array (keep last 1000 entries to prevent memory issues)
-            if (!global.crackAttempts) {
-                global.crackAttempts = [];
-                console.log('Initialized global.crackAttempts array');
+            // Check if this entry already exists (by unique_id or attempt_number + timestamp)
+            const existingIndex = global.crackAttempts.findIndex(log => 
+                log.unique_id === logEntry.unique_id || 
+                (log.attempt_number === logEntry.attempt_number && log.timestamp === logEntry.timestamp && log.hwid === logEntry.hwid)
+            );
+            
+            if (existingIndex === -1) {
+                // New entry - add it
+                global.crackAttempts.push(logEntry);
+                console.log(`✅ NEW crack attempt logged. Total stored: ${global.crackAttempts.length}`);
+            } else {
+                // Entry exists - update it or skip
+                console.log(`⚠️ Duplicate entry detected (unique_id: ${logEntry.unique_id}), skipping...`);
             }
             
-            global.crackAttempts.push(logEntry);
-            console.log(`✅ Total crack attempts stored: ${global.crackAttempts.length}`);
-            console.log('=== END CRACK ATTEMPT LOG ===');
-            if (global.crackAttempts.length > 1000) {
+            // Keep last 5000 entries (increased from 1000)
+            if (global.crackAttempts.length > 5000) {
                 // Delete old screenshot file if exists
                 const oldEntry = global.crackAttempts.shift();
                 if (oldEntry.screenshot_path) {
@@ -750,10 +844,16 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
                 }
             }
             
+            // Save to file immediately
+            saveCrackLogsToFile();
+            
+            console.log('=== END CRACK ATTEMPT LOG ===');
+            
             res.json({
                 success: true,
                 message: 'Crack attempt logged successfully',
-                log_entry: logEntry
+                log_entry: logEntry,
+                total_logs: global.crackAttempts.length
             });
         });
     } else {
@@ -772,15 +872,33 @@ function handleJsonCrackAttempt(req, res) {
     console.log('=== HANDLING JSON CRACK ATTEMPT ===');
     console.log('Request body:', JSON.stringify(req.body, null, 2));
     
-    const { attempt_number, reason, username, machine_name, timestamp, os_version, discord_id, discord_name, hwid, ip_address } = req.body;
+    const { 
+        attempt_number, 
+        reason, 
+        username, 
+        machine_name, 
+        timestamp, 
+        os_version, 
+        discord_id, 
+        discord_name, 
+        hwid, 
+        ip_address, 
+        unique_id,
+        unique_log_id,  // Also check for unique_log_id (backward compatibility)
+        screenshot_base64 
+    } = req.body;
+    
+    // Use unique_id or unique_log_id, whichever is available
+    const finalUniqueId = unique_id || unique_log_id;
+    console.log('Unique ID from JSON request:', finalUniqueId);
     
     // Initialize crack attempts array if it doesn't exist
     if (!global.crackAttempts) {
         global.crackAttempts = [];
-        console.log('Initialized global.crackAttempts array');
+        loadCrackLogsFromFile();
     }
     
-    // Create log entry
+    // Create log entry with unique ID
     const logEntry = {
         attempt_number: parseInt(attempt_number) || 0,
         reason: reason || 'Unknown',
@@ -792,26 +910,56 @@ function handleJsonCrackAttempt(req, res) {
         discord_name: discord_name || 'Not found',
         hwid: hwid || 'Unknown',
         ip_address: ip_address || 'Unknown',
+        unique_id: finalUniqueId || `${attempt_number}_${Date.now()}_${Math.random().toString(36).substring(7)}`,
         screenshot_filename: null,
         screenshot_path: null,
+        screenshot_base64: screenshot_base64 || null,
         received_at: new Date().toISOString()
     };
     
-            console.log('=== CRACK ATTEMPT LOG ENTRY (JSON) ===');
-            console.log(JSON.stringify(logEntry, null, 2));
-            
-            // Add to array (keep last 1000 entries to prevent memory issues)
-            global.crackAttempts.push(logEntry);
-            console.log(`✅ Total crack attempts stored: ${global.crackAttempts.length}`);
-            console.log('=== END CRACK ATTEMPT LOG ===');
-    if (global.crackAttempts.length > 1000) {
-        global.crackAttempts.shift(); // Remove oldest entry
+    console.log('=== CRACK ATTEMPT LOG ENTRY (JSON) ===');
+    console.log(JSON.stringify(logEntry, null, 2));
+    console.log('Unique ID:', logEntry.unique_id);
+    
+    // Check if this entry already exists
+    const existingIndex = global.crackAttempts.findIndex(log => 
+        log.unique_id === logEntry.unique_id || 
+        (log.attempt_number === logEntry.attempt_number && log.timestamp === logEntry.timestamp && log.hwid === logEntry.hwid)
+    );
+    
+    if (existingIndex === -1) {
+        // New entry - add it
+        global.crackAttempts.push(logEntry);
+        console.log(`✅ NEW crack attempt logged (JSON). Total stored: ${global.crackAttempts.length}`);
+    } else {
+        // Entry exists - update it or skip
+        console.log(`⚠️ Duplicate entry detected (unique_id: ${logEntry.unique_id}), skipping...`);
     }
+    
+    // Keep last 5000 entries
+    if (global.crackAttempts.length > 5000) {
+        const oldEntry = global.crackAttempts.shift(); // Remove oldest entry
+        if (oldEntry.screenshot_path) {
+            try {
+                if (fs.existsSync(oldEntry.screenshot_path)) {
+                    fs.unlinkSync(oldEntry.screenshot_path);
+                }
+            } catch (e) {
+                console.error('Error deleting old screenshot:', e);
+            }
+        }
+    }
+    
+    // Save to file immediately
+    saveCrackLogsToFile();
+    
+    console.log('=== END CRACK ATTEMPT LOG ===');
     
     res.json({
         success: true,
         message: 'Crack attempt logged successfully',
-        log_entry: logEntry
+        log_entry: logEntry,
+        total_logs: global.crackAttempts.length
     });
 }
 
@@ -834,19 +982,38 @@ app.post('/auth/get-crack-logs', validateAppSecret, (req, res) => {
         console.log('Initialized global.crackAttempts array in get-crack-logs');
     }
     
+    // Reload from file to ensure we have latest data
+    loadCrackLogsFromFile();
+    
     console.log(`=== GET CRACK LOGS REQUEST ===`);
     console.log(`Total stored: ${global.crackAttempts.length}, Requesting: ${limit}`);
-    console.log('First 3 entries:', global.crackAttempts.slice(0, 3).map(e => ({ attempt: e.attempt_number, reason: e.reason, timestamp: e.timestamp })));
+    console.log('First 3 entries:', global.crackAttempts.slice(0, 3).map(e => ({ 
+        attempt: e.attempt_number, 
+        reason: e.reason, 
+        timestamp: e.timestamp,
+        unique_id: e.unique_id 
+    })));
+    
+    // Sort by received_at (most recent first) and return
+    const sortedLogs = [...global.crackAttempts].sort((a, b) => {
+        const timeA = new Date(a.received_at || a.timestamp || 0).getTime();
+        const timeB = new Date(b.received_at || b.timestamp || 0).getTime();
+        return timeB - timeA; // Descending order (newest first)
+    });
     
     // Return most recent entries with screenshot URLs
-    const logs = global.crackAttempts.slice(-limit).reverse().map(log => {
+    const logs = sortedLogs.slice(0, limit).map(log => {
         const logCopy = { ...log };
         if (log.screenshot_filename) {
             // Generate URL to access screenshot
             logCopy.screenshot_url = `/auth/get-screenshot/${log.screenshot_filename}`;
         }
+        // Remove screenshot_base64 from response (too large)
+        delete logCopy.screenshot_base64;
         return logCopy;
     });
+    
+    console.log(`Returning ${logs.length} logs (sorted by most recent)`);
     
     res.json({
         success: true,
