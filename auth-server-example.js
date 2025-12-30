@@ -34,12 +34,13 @@ const users = {
 };
 
 const licenses = {
-    // Format: license_key: { valid: true, used: false, hwid: null, expiry: null }
+    // Format: license_key: { valid: true, used: false, hwid: null, ip: null, expiry: null }
     // Add your license keys here:
     'LICENSE-KEY-12345': {
         valid: true,
         used: false,
         hwid: null,
+        ip: null,
         expiry: null // null = never expires
     },
     // Add more license keys below:
@@ -119,10 +120,14 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         return res.json({ success: false, message: 'License has expired' });
     }
     
-    // Mark as used and bind to HWID
+    // Mark as used and bind to HWID and IP
     if (!license.used) {
         license.used = true;
         license.hwid = hwid;
+        license.ip = cleanIP;
+    } else {
+        // Update IP if key is already used (in case IP changed)
+        license.ip = cleanIP;
     }
     
     // Generate session token
@@ -139,6 +144,28 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
 // Username/Password validation endpoint
 app.post('/auth/login', validateAppSecret, (req, res) => {
     const { username, password, hwid, app_name } = req.body;
+    
+    // Get client IP address
+    const clientIP = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const cleanIP = clientIP ? clientIP.split(',')[0].trim() : 'unknown';
+    
+    // Check if HWID is blacklisted
+    if (hwid && blacklistedHWIDs.includes(hwid)) {
+        return res.json({ 
+            success: false, 
+            message: 'Blacklisted user detected',
+            blacklisted: true 
+        });
+    }
+    
+    // Check if IP is blacklisted
+    if (blacklistedIPs.includes(cleanIP)) {
+        return res.json({ 
+            success: false, 
+            message: 'Blacklisted user detected',
+            blacklisted: true 
+        });
+    }
     
     if (!username || !password) {
         return res.json({ success: false, message: 'Username and password required' });
@@ -218,6 +245,7 @@ app.post('/auth/generate-key', validateAppSecret, (req, res) => {
             valid: true,
             used: false,
             hwid: null,
+            ip: null,
             expiry: expiry
         };
         
@@ -257,6 +285,7 @@ app.post('/auth/list-keys', validateAppSecret, (req, res) => {
             valid: license.valid,
             used: license.used,
             hwid: license.hwid,
+            ip: license.ip,
             expiry: license.expiry // Return ISO string, client will format it
         };
     });
@@ -315,38 +344,53 @@ app.post('/auth/delete-key', validateAppSecret, (req, res) => {
     });
 });
 
-// Blacklist HWID or IP (Admin only)
+// Blacklist by License Key (Admin only)
+// This will blacklist the HWID and IP of whoever used the key
 app.post('/auth/blacklist', validateAppSecret, (req, res) => {
-    const { hwid, ip } = req.body;
+    const { license_key } = req.body;
     
-    if (!hwid && !ip) {
-        return res.json({ success: false, message: 'HWID or IP address required' });
+    if (!license_key) {
+        return res.json({ success: false, message: 'License key required' });
+    }
+    
+    const license = licenses[license_key];
+    
+    if (!license) {
+        return res.json({ success: false, message: 'License key not found' });
+    }
+    
+    if (!license.used) {
+        return res.json({ success: false, message: 'License key has not been used yet. Cannot blacklist unused keys.' });
     }
     
     let added = [];
     
-    if (hwid && !blacklistedHWIDs.includes(hwid)) {
-        blacklistedHWIDs.push(hwid);
-        added.push(`HWID: ${hwid}`);
+    // Blacklist the HWID if it exists and not already blacklisted
+    if (license.hwid && !blacklistedHWIDs.includes(license.hwid)) {
+        blacklistedHWIDs.push(license.hwid);
+        added.push(`HWID: ${license.hwid}`);
     }
     
-    if (ip && !blacklistedIPs.includes(ip)) {
-        blacklistedIPs.push(ip);
-        added.push(`IP: ${ip}`);
+    // Blacklist the IP if it exists and not already blacklisted
+    if (license.ip && license.ip !== 'unknown' && !blacklistedIPs.includes(license.ip)) {
+        blacklistedIPs.push(license.ip);
+        added.push(`IP: ${license.ip}`);
     }
     
     if (added.length === 0) {
         return res.json({ 
             success: false, 
-            message: 'HWID or IP already blacklisted' 
+            message: 'HWID and IP for this license key are already blacklisted' 
         });
     }
     
     res.json({
         success: true,
-        message: `Blacklisted: ${added.join(', ')}`,
+        message: `Blacklisted user from license key ${license_key}: ${added.join(', ')}`,
         blacklistedHWIDs: blacklistedHWIDs,
-        blacklistedIPs: blacklistedIPs
+        blacklistedIPs: blacklistedIPs,
+        hwid: license.hwid,
+        ip: license.ip
     });
 });
 
