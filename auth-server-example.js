@@ -175,8 +175,8 @@ app.post('/auth/generate-key', validateAppSecret, (req, res) => {
     // Calculate expiry based on key type
     let expiry = null;
     if (keyType === '24hr') {
-        const expiryDate = new Date();
-        expiryDate.setHours(expiryDate.getHours() + 24);
+        // Add 24 hours (86400000 milliseconds) to current time
+        const expiryDate = new Date(Date.now() + (24 * 60 * 60 * 1000));
         expiry = expiryDate.toISOString();
     } else if (keyType === 'lifetime') {
         expiry = null; // null = never expires
@@ -224,13 +224,16 @@ app.post('/auth/generate-key', validateAppSecret, (req, res) => {
 
 // List all license keys (Admin only - use POST with app_secret in body)
 app.post('/auth/list-keys', validateAppSecret, (req, res) => {
-    const keysList = Object.keys(licenses).map(key => ({
-        key: key,
-        valid: licenses[key].valid,
-        used: licenses[key].used,
-        hwid: licenses[key].hwid,
-        expiry: licenses[key].expiry
-    }));
+    const keysList = Object.keys(licenses).map(key => {
+        const license = licenses[key];
+        return {
+            key: key,
+            valid: license.valid,
+            used: license.used,
+            hwid: license.hwid,
+            expiry: license.expiry // Return ISO string, client will format it
+        };
+    });
     
     res.json({
         success: true,
