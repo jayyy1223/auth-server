@@ -168,9 +168,19 @@ app.post('/auth/session', validateAppSecret, (req, res) => {
 
 // License Key Generator Endpoint (Admin only - add authentication in production!)
 app.post('/auth/generate-key', validateAppSecret, (req, res) => {
-    const { count = 1, prefix = 'LICENSE' } = req.body;
+    const { count = 1, prefix = 'LICENSE', keyType = 'lifetime' } = req.body;
     
     const generatedKeys = [];
+    
+    // Calculate expiry based on key type
+    let expiry = null;
+    if (keyType === '24hr') {
+        const expiryDate = new Date();
+        expiryDate.setHours(expiryDate.getHours() + 24);
+        expiry = expiryDate.toISOString();
+    } else if (keyType === 'lifetime') {
+        expiry = null; // null = never expires
+    }
     
     for (let i = 0; i < count; i++) {
         // Generate a random license key
@@ -182,16 +192,33 @@ app.post('/auth/generate-key', validateAppSecret, (req, res) => {
             valid: true,
             used: false,
             hwid: null,
-            expiry: null
+            expiry: expiry
         };
         
-        generatedKeys.push(licenseKey);
+        // Format expiry for display
+        let expiryDisplay = 'Never';
+        if (expiry) {
+            try {
+                const expiryDate = new Date(expiry);
+                if (!isNaN(expiryDate.getTime())) {
+                    expiryDisplay = expiryDate.toLocaleString();
+                }
+            } catch (e) {
+                expiryDisplay = 'Never';
+            }
+        }
+        
+        generatedKeys.push({
+            key: licenseKey,
+            type: keyType,
+            expiry: expiryDisplay
+        });
     }
     
     res.json({
         success: true,
         keys: generatedKeys,
-        message: `Generated ${count} license key(s)`
+        message: `Generated ${count} ${keyType} license key(s)`
     });
 });
 
@@ -209,6 +236,53 @@ app.post('/auth/list-keys', validateAppSecret, (req, res) => {
         success: true,
         total: keysList.length,
         keys: keysList
+    });
+});
+
+// Reset HWID for a license key (Admin only)
+app.post('/auth/reset-hwid', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    
+    if (!license_key) {
+        return res.json({ success: false, message: 'License key required' });
+    }
+    
+    const license = licenses[license_key];
+    
+    if (!license) {
+        return res.json({ success: false, message: 'License key not found' });
+    }
+    
+    // Reset HWID and mark as unused
+    license.hwid = null;
+    license.used = false;
+    
+    res.json({
+        success: true,
+        message: 'HWID reset successfully',
+        license_key: license_key
+    });
+});
+
+// Delete a license key (Admin only)
+app.post('/auth/delete-key', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    
+    if (!license_key) {
+        return res.json({ success: false, message: 'License key required' });
+    }
+    
+    if (!licenses[license_key]) {
+        return res.json({ success: false, message: 'License key not found' });
+    }
+    
+    // Delete the license key
+    delete licenses[license_key];
+    
+    res.json({
+        success: true,
+        message: 'License key deleted successfully',
+        license_key: license_key
     });
 });
 
@@ -237,3 +311,4 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
+
