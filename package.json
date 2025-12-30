@@ -1,6 +1,9 @@
- "description": "Custom authentication server for loader",
-  "main": "screenshot-server.js",
+"description": "Custom authentication server for loader",
+  "main": "auth-server-example.js",
   "scripts": {
-    "start": "node screenshot-server.js",
-    "auth-server": "node auth-server-example.js",
-    "screenshot-server": "node screenshot-server.js"
+    "start": "node auth-server-example.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "body-parser": "^1.20.2"
+  },
