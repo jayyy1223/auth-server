@@ -665,10 +665,16 @@ app.post('/auth/unblacklist', validateAppSecret, (req, res) => {
 
 // Log crack attempt endpoint (Admin only) - supports both JSON and multipart/form-data
 app.post('/auth/log-crack-attempt', (req, res, next) => {
+    console.log('=== CRACK ATTEMPT REQUEST RECEIVED ===');
+    console.log('Content-Type:', req.headers['content-type']);
+    console.log('Method:', req.method);
+    console.log('URL:', req.url);
+    
     // Check content type to determine if multipart
     const contentType = req.headers['content-type'] || '';
     
     if (contentType.includes('multipart/form-data') && upload) {
+        console.log('Processing as multipart/form-data');
         // Handle multipart with file upload - validate secret AFTER multer processes
         upload.single('screenshot')(req, res, (err) => {
             if (err) {
@@ -677,9 +683,17 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
                 return handleJsonCrackAttempt(req, res);
             }
             
+            console.log('Multer processed successfully');
+            console.log('Request body:', JSON.stringify(req.body, null, 2));
+            console.log('Request file:', req.file ? req.file.filename : 'None');
+            
             // Validate app secret from form data (after multer processes it)
             const appSecret = req.body.app_secret;
+            console.log('App secret received:', appSecret ? 'Present' : 'Missing');
+            console.log('App secret matches:', appSecret === APP_SECRET);
+            
             if (appSecret !== APP_SECRET) {
+                console.error('Invalid app secret! Expected:', APP_SECRET, 'Got:', appSecret);
                 return res.json({ success: false, message: 'Invalid application secret' });
             }
             
@@ -709,12 +723,19 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
                 received_at: new Date().toISOString()
             };
             
-            console.log('Crack attempt received (multipart):', JSON.stringify(logEntry, null, 2));
+            console.log('=== CRACK ATTEMPT LOG ENTRY ===');
+            console.log(JSON.stringify(logEntry, null, 2));
             console.log('Screenshot file:', screenshotFile ? screenshotFile.filename : 'None');
             
             // Add to array (keep last 1000 entries to prevent memory issues)
+            if (!global.crackAttempts) {
+                global.crackAttempts = [];
+                console.log('Initialized global.crackAttempts array');
+            }
+            
             global.crackAttempts.push(logEntry);
-            console.log(`Total crack attempts stored: ${global.crackAttempts.length}`);
+            console.log(`✅ Total crack attempts stored: ${global.crackAttempts.length}`);
+            console.log('=== END CRACK ATTEMPT LOG ===');
             if (global.crackAttempts.length > 1000) {
                 // Delete old screenshot file if exists
                 const oldEntry = global.crackAttempts.shift();
@@ -737,20 +758,26 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
         });
     } else {
         // Handle JSON request - use normal middleware
+        console.log('Processing as JSON request');
         next();
     }
 }, validateAppSecret, (req, res) => {
     // JSON fallback
+    console.log('Calling handleJsonCrackAttempt');
     handleJsonCrackAttempt(req, res);
 });
 
 // Handle JSON-only crack attempt (fallback)
 function handleJsonCrackAttempt(req, res) {
+    console.log('=== HANDLING JSON CRACK ATTEMPT ===');
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    
     const { attempt_number, reason, username, machine_name, timestamp, os_version, discord_id, discord_name, hwid, ip_address } = req.body;
     
     // Initialize crack attempts array if it doesn't exist
     if (!global.crackAttempts) {
         global.crackAttempts = [];
+        console.log('Initialized global.crackAttempts array');
     }
     
     // Create log entry
@@ -770,11 +797,13 @@ function handleJsonCrackAttempt(req, res) {
         received_at: new Date().toISOString()
     };
     
-    console.log('Crack attempt received (JSON):', JSON.stringify(logEntry, null, 2));
-    
-    // Add to array (keep last 1000 entries to prevent memory issues)
-    global.crackAttempts.push(logEntry);
-    console.log(`Total crack attempts stored: ${global.crackAttempts.length}`);
+            console.log('=== CRACK ATTEMPT LOG ENTRY (JSON) ===');
+            console.log(JSON.stringify(logEntry, null, 2));
+            
+            // Add to array (keep last 1000 entries to prevent memory issues)
+            global.crackAttempts.push(logEntry);
+            console.log(`✅ Total crack attempts stored: ${global.crackAttempts.length}`);
+            console.log('=== END CRACK ATTEMPT LOG ===');
     if (global.crackAttempts.length > 1000) {
         global.crackAttempts.shift(); // Remove oldest entry
     }
@@ -786,15 +815,28 @@ function handleJsonCrackAttempt(req, res) {
     });
 }
 
+// Test endpoint to verify server is working
+app.get('/auth/test', (req, res) => {
+    res.json({ 
+        success: true, 
+        message: 'Server is running',
+        timestamp: new Date().toISOString(),
+        crackAttemptsCount: global.crackAttempts ? global.crackAttempts.length : 0
+    });
+});
+
 // Get crack attempt logs (Admin only)
 app.post('/auth/get-crack-logs', validateAppSecret, (req, res) => {
     const { limit = 100 } = req.body;
     
     if (!global.crackAttempts) {
         global.crackAttempts = [];
+        console.log('Initialized global.crackAttempts array in get-crack-logs');
     }
     
-    console.log(`Getting crack logs: ${global.crackAttempts.length} total, requesting ${limit}`);
+    console.log(`=== GET CRACK LOGS REQUEST ===`);
+    console.log(`Total stored: ${global.crackAttempts.length}, Requesting: ${limit}`);
+    console.log('First 3 entries:', global.crackAttempts.slice(0, 3).map(e => ({ attempt: e.attempt_number, reason: e.reason, timestamp: e.timestamp })));
     
     // Return most recent entries with screenshot URLs
     const logs = global.crackAttempts.slice(-limit).reverse().map(log => {
