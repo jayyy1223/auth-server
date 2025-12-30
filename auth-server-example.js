@@ -197,9 +197,36 @@ const whitelistedLicenseKeys = [];
 // IMPORTANT: Change this to a secure random string!
 const APP_SECRET = 'ABCJDWQ91D9219D21JKWDDKQAD912Q';
 
-// Middleware to validate app secret
+// Helper function to deobfuscate data (XOR with key)
+function deobfuscateData(obfuscated, key) {
+    try {
+        if (!obfuscated || !key) return obfuscated;
+        const dataBytes = Buffer.from(obfuscated, 'base64');
+        const keyBytes = Buffer.from(key, 'utf8');
+        const result = Buffer.alloc(dataBytes.length);
+        for (let i = 0; i < dataBytes.length; i++) {
+            result[i] = dataBytes[i] ^ keyBytes[i % keyBytes.length];
+        }
+        return result.toString('utf8');
+    } catch (e) {
+        return obfuscated; // Return original if deobfuscation fails
+    }
+}
+
+// Middleware to validate app secret (with obfuscation support)
 function validateAppSecret(req, res, next) {
-    const appSecret = req.body.app_secret || req.body.app_secret;
+    let appSecret = req.body.app_secret || req.body.app_secret;
+    const { _obf_key, _obf_enabled } = req.body;
+    
+    // Deobfuscate app_secret if obfuscation is enabled
+    if (_obf_enabled === '1' && _obf_key && appSecret) {
+        try {
+            appSecret = deobfuscateData(appSecret, _obf_key);
+        } catch (e) {
+            console.error('Deobfuscation error in middleware:', e);
+        }
+    }
+    
     if (appSecret !== APP_SECRET) {
         return res.json({ success: false, message: 'Invalid application secret' });
     }
@@ -209,7 +236,19 @@ function validateAppSecret(req, res, next) {
 // License validation endpoint
 app.post('/auth/license', validateAppSecret, (req, res) => {
     try {
-        const { license_key, hwid, app_name } = req.body;
+        let { license_key, hwid, app_name, app_secret, _obf_key, _obf_enabled } = req.body;
+        
+        // Deobfuscate data if obfuscation is enabled
+        if (_obf_enabled === '1' && _obf_key) {
+            try {
+                if (license_key) license_key = deobfuscateData(license_key, _obf_key);
+                if (hwid) hwid = deobfuscateData(hwid, _obf_key);
+                if (app_secret) app_secret = deobfuscateData(app_secret, _obf_key);
+            } catch (e) {
+                console.error('Deobfuscation error:', e);
+                // Continue with original values if deobfuscation fails
+            }
+        }
         
         // Get client IP address
         const clientIP = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
