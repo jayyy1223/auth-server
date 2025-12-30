@@ -34,27 +34,38 @@ const users = {
 };
 
 const licenses = {
-    // Format: license_key: { valid: true, used: false, hwid: null, ip: null, expiry: null }
+    // Format: license_key: { valid: true, used: false, hwid: null, ip: null, expiry: null, system_info: {} }
     // Add your license keys here:
     'LICENSE-KEY-12345': {
         valid: true,
         used: false,
         hwid: null,
         ip: null,
-        expiry: null // null = never expires
+        expiry: null, // null = never expires
+        system_info: null, // Will store full system information
+        first_used: null, // Timestamp of first use
+        last_used: null // Timestamp of last use
     },
     // Add more license keys below:
     // 'YOUR-LICENSE-KEY-1': {
     //     valid: true,
     //     used: false,
     //     hwid: null,
-    //     expiry: null
+    //     ip: null,
+    //     expiry: null,
+    //     system_info: null,
+    //     first_used: null,
+    //     last_used: null
     // },
     // 'YOUR-LICENSE-KEY-2': {
     //     valid: true,
     //     used: false,
     //     hwid: null,
-    //     expiry: null
+    //     ip: null,
+    //     expiry: null,
+    //     system_info: null,
+    //     first_used: null,
+    //     last_used: null
     // }
 };
 
@@ -120,14 +131,37 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         return res.json({ success: false, message: 'License has expired' });
     }
     
+    // Store system information from request
+    const systemInfo = {
+        hwid: hwid || null,
+        ip: cleanIP,
+        user_agent: req.headers['user-agent'] || 'unknown',
+        timestamp: new Date().toISOString(),
+        disk_serials: req.body.disk_serials || null,
+        baseboard_serial: req.body.baseboard_serial || null,
+        bios_serial: req.body.bios_serial || null,
+        processor_id: req.body.processor_id || null,
+        mac_addresses: req.body.mac_addresses || null,
+        volume_serials: req.body.volume_serials || null,
+        computer_name: req.body.computer_name || null,
+        username: req.body.username || null,
+        os_version: req.body.os_version || null,
+        os_architecture: req.body.os_architecture || null
+    };
+
     // Mark as used and bind to HWID and IP
     if (!license.used) {
         license.used = true;
         license.hwid = hwid;
         license.ip = cleanIP;
+        license.system_info = systemInfo;
+        license.first_used = new Date().toISOString();
+        license.last_used = new Date().toISOString();
     } else {
-        // Update IP if key is already used (in case IP changed)
+        // Update IP and system info if key is already used (in case IP changed or system info updated)
         license.ip = cleanIP;
+        license.system_info = systemInfo;
+        license.last_used = new Date().toISOString();
     }
     
     // Generate session token
@@ -246,7 +280,10 @@ app.post('/auth/generate-key', validateAppSecret, (req, res) => {
             used: false,
             hwid: null,
             ip: null,
-            expiry: expiry
+            expiry: expiry,
+            system_info: null,
+            first_used: null,
+            last_used: null
         };
         
         // Format expiry for display
@@ -401,6 +438,106 @@ app.post('/auth/list-blacklist', validateAppSecret, (req, res) => {
         blacklistedHWIDs: blacklistedHWIDs,
         blacklistedIPs: blacklistedIPs
     });
+});
+
+// Retrieve key information with all HWID, IP, and system info (Admin only)
+app.post('/auth/get-key-info', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    
+    if (!license_key) {
+        return res.json({ success: false, message: 'License key required' });
+    }
+    
+    const license = licenses[license_key];
+    
+    if (!license) {
+        return res.json({ success: false, message: 'License key not found' });
+    }
+    
+    // Format expiry for display
+    let expiryDisplay = 'Never';
+    if (license.expiry) {
+        try {
+            const expiryDate = new Date(license.expiry);
+            if (!isNaN(expiryDate.getTime())) {
+                expiryDisplay = expiryDate.toLocaleString();
+            }
+        } catch (e) {
+            expiryDisplay = 'Never';
+        }
+    }
+    
+    // Format timestamps
+    let firstUsedDisplay = 'Never';
+    if (license.first_used) {
+        try {
+            const firstUsedDate = new Date(license.first_used);
+            if (!isNaN(firstUsedDate.getTime())) {
+                firstUsedDisplay = firstUsedDate.toLocaleString();
+            }
+        } catch (e) {
+            firstUsedDisplay = 'Never';
+        }
+    }
+    
+    let lastUsedDisplay = 'Never';
+    if (license.last_used) {
+        try {
+            const lastUsedDate = new Date(license.last_used);
+            if (!isNaN(lastUsedDate.getTime())) {
+                lastUsedDisplay = lastUsedDate.toLocaleString();
+            }
+        } catch (e) {
+            lastUsedDisplay = 'Never';
+        }
+    }
+    
+    // Build comprehensive response
+    const response = {
+        success: true,
+        license_key: license_key,
+        license_info: {
+            valid: license.valid,
+            used: license.used,
+            expiry: expiryDisplay,
+            expiry_raw: license.expiry,
+            first_used: firstUsedDisplay,
+            first_used_raw: license.first_used,
+            last_used: lastUsedDisplay,
+            last_used_raw: license.last_used
+        },
+        hardware_info: {
+            hwid: license.hwid || 'Not set',
+            ip_address: license.ip || 'Not set',
+            is_blacklisted_hwid: license.hwid ? blacklistedHWIDs.includes(license.hwid) : false,
+            is_blacklisted_ip: license.ip ? blacklistedIPs.includes(license.ip) : false
+        },
+        system_info: license.system_info || {
+            message: 'System information not available (key not used yet)'
+        }
+    };
+    
+    // Add detailed system info if available
+    if (license.system_info) {
+        response.system_info = {
+            hwid: license.system_info.hwid || 'Not provided',
+            ip_address: license.system_info.ip || 'Not provided',
+            user_agent: license.system_info.user_agent || 'Not provided',
+            timestamp: license.system_info.timestamp || 'Not provided',
+            disk_serials: license.system_info.disk_serials || 'Not provided',
+            baseboard_serial: license.system_info.baseboard_serial || 'Not provided',
+            bios_serial: license.system_info.bios_serial || 'Not provided',
+            processor_id: license.system_info.processor_id || 'Not provided',
+            mac_addresses: license.system_info.mac_addresses || 'Not provided',
+            volume_serials: license.system_info.volume_serials || 'Not provided',
+            computer_name: license.system_info.computer_name || 'Not provided',
+            username: license.system_info.username || 'Not provided',
+            os_version: license.system_info.os_version || 'Not provided',
+            os_architecture: license.system_info.os_architecture || 'Not provided'
+        };
+    }
+    
+    res.json(response);
 });
 
 // Remove from blacklist (Admin only)
