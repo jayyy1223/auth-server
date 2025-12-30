@@ -4,7 +4,32 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const crypto = require('crypto');
+const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
 const app = express();
+
+// Ensure upload directories exist
+const uploadDir = path.join(__dirname, 'uploads', 'crack_screenshots');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, uploadDir);
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, 'crack_' + uniqueSuffix + path.extname(file.originalname || '.png'));
+    }
+});
+
+const upload = multer({ 
+    storage: storage,
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+});
 
 // Enable CORS for all routes
 app.use((req, res, next) => {
@@ -22,6 +47,12 @@ app.use((req, res, next) => {
 
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
+
+// Initialize global crack attempts array
+if (!global.crackAttempts) {
+    global.crackAttempts = [];
+    console.log('Initialized global.crackAttempts array');
+}
 
 // In-memory database (replace with real database like MySQL, MongoDB, or SQLite)
 const users = {
@@ -613,68 +644,84 @@ app.post('/auth/unblacklist', validateAppSecret, (req, res) => {
 });
 
 // Log crack attempt endpoint (Admin only) - supports both JSON and multipart/form-data
-app.post('/auth/log-crack-attempt', validateAppSecret, (req, res) => {
-    // Check if multipart/form-data (has file)
-    const multer = require('multer');
-    const upload = multer({ 
-        dest: 'uploads/crack_screenshots/',
-        limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
-    });
+app.post('/auth/log-crack-attempt', (req, res, next) => {
+    // Check content type to determine if multipart
+    const contentType = req.headers['content-type'] || '';
     
-    upload.single('screenshot')(req, res, (err) => {
-        if (err) {
-            // If multipart fails, try JSON
-            handleJsonCrackAttempt(req, res);
-            return;
-        }
-        
-        // Handle multipart request
-        const { attempt_number, reason, username, machine_name, timestamp, os_version, discord_id, discord_name, hwid, ip_address } = req.body;
-        const screenshotFile = req.file;
-        
-        // Initialize crack attempts array if it doesn't exist
-        if (!global.crackAttempts) {
-            global.crackAttempts = [];
-        }
-        
-        // Create log entry
-        const logEntry = {
-            attempt_number: parseInt(attempt_number) || 0,
-            reason: reason || 'Unknown',
-            username: username || 'Unknown',
-            machine_name: machine_name || 'Unknown',
-            timestamp: timestamp || new Date().toISOString(),
-            os_version: os_version || 'Unknown',
-            discord_id: discord_id || 'Not found',
-            discord_name: discord_name || 'Not found',
-            hwid: hwid || 'Unknown',
-            ip_address: ip_address || 'Unknown',
-            screenshot_filename: screenshotFile ? screenshotFile.filename : null,
-            screenshot_path: screenshotFile ? screenshotFile.path : null,
-            received_at: new Date().toISOString()
-        };
-        
-        // Add to array (keep last 1000 entries to prevent memory issues)
-        global.crackAttempts.push(logEntry);
-        if (global.crackAttempts.length > 1000) {
-            // Delete old screenshot file if exists
-            const oldEntry = global.crackAttempts.shift();
-            if (oldEntry.screenshot_path) {
-                try {
-                    const fs = require('fs');
-                    if (fs.existsSync(oldEntry.screenshot_path)) {
-                        fs.unlinkSync(oldEntry.screenshot_path);
-                    }
-                } catch (e) {}
+    if (contentType.includes('multipart/form-data')) {
+        // Handle multipart with file upload - validate secret AFTER multer processes
+        upload.single('screenshot')(req, res, (err) => {
+            if (err) {
+                console.error('Multer error:', err);
+                // If multipart fails, try JSON fallback
+                return handleJsonCrackAttempt(req, res);
             }
-        }
-        
-        res.json({
-            success: true,
-            message: 'Crack attempt logged successfully',
-            log_entry: logEntry
+            
+            // Validate app secret from form data (after multer processes it)
+            const appSecret = req.body.app_secret;
+            if (appSecret !== APP_SECRET) {
+                return res.json({ success: false, message: 'Invalid application secret' });
+            }
+            
+            // Handle multipart request
+            const { attempt_number, reason, username, machine_name, timestamp, os_version, discord_id, discord_name, hwid, ip_address } = req.body;
+            const screenshotFile = req.file;
+            
+            // Initialize crack attempts array if it doesn't exist
+            if (!global.crackAttempts) {
+                global.crackAttempts = [];
+            }
+            
+            // Create log entry
+            const logEntry = {
+                attempt_number: parseInt(attempt_number) || 0,
+                reason: reason || 'Unknown',
+                username: username || 'Unknown',
+                machine_name: machine_name || 'Unknown',
+                timestamp: timestamp || new Date().toISOString(),
+                os_version: os_version || 'Unknown',
+                discord_id: discord_id || 'Not found',
+                discord_name: discord_name || 'Not found',
+                hwid: hwid || 'Unknown',
+                ip_address: ip_address || 'Unknown',
+                screenshot_filename: screenshotFile ? screenshotFile.filename : null,
+                screenshot_path: screenshotFile ? screenshotFile.path : null,
+                received_at: new Date().toISOString()
+            };
+            
+            console.log('Crack attempt received (multipart):', JSON.stringify(logEntry, null, 2));
+            console.log('Screenshot file:', screenshotFile ? screenshotFile.filename : 'None');
+            
+            // Add to array (keep last 1000 entries to prevent memory issues)
+            global.crackAttempts.push(logEntry);
+            console.log(`Total crack attempts stored: ${global.crackAttempts.length}`);
+            if (global.crackAttempts.length > 1000) {
+                // Delete old screenshot file if exists
+                const oldEntry = global.crackAttempts.shift();
+                if (oldEntry.screenshot_path) {
+                    try {
+                        if (fs.existsSync(oldEntry.screenshot_path)) {
+                            fs.unlinkSync(oldEntry.screenshot_path);
+                        }
+                    } catch (e) {
+                        console.error('Error deleting old screenshot:', e);
+                    }
+                }
+            }
+            
+            res.json({
+                success: true,
+                message: 'Crack attempt logged successfully',
+                log_entry: logEntry
+            });
         });
-    });
+    } else {
+        // Handle JSON request - use normal middleware
+        next();
+    }
+}, validateAppSecret, (req, res) => {
+    // JSON fallback
+    handleJsonCrackAttempt(req, res);
 });
 
 // Handle JSON-only crack attempt (fallback)
@@ -703,8 +750,11 @@ function handleJsonCrackAttempt(req, res) {
         received_at: new Date().toISOString()
     };
     
+    console.log('Crack attempt received (JSON):', JSON.stringify(logEntry, null, 2));
+    
     // Add to array (keep last 1000 entries to prevent memory issues)
     global.crackAttempts.push(logEntry);
+    console.log(`Total crack attempts stored: ${global.crackAttempts.length}`);
     if (global.crackAttempts.length > 1000) {
         global.crackAttempts.shift(); // Remove oldest entry
     }
@@ -723,6 +773,8 @@ app.post('/auth/get-crack-logs', validateAppSecret, (req, res) => {
     if (!global.crackAttempts) {
         global.crackAttempts = [];
     }
+    
+    console.log(`Getting crack logs: ${global.crackAttempts.length} total, requesting ${limit}`);
     
     // Return most recent entries with screenshot URLs
     const logs = global.crackAttempts.slice(-limit).reverse().map(log => {
@@ -749,10 +801,27 @@ app.get('/auth/get-screenshot/:filename', (req, res) => {
     const filepath = path.join(uploadDir, safeFilename);
     
     if (fs.existsSync(filepath)) {
-        res.sendFile(filepath);
+        res.sendFile(path.resolve(filepath));
     } else {
         res.status(404).json({ success: false, message: 'Screenshot not found' });
     }
+});
+
+// Debug endpoint to check if server is receiving data
+app.post('/auth/test-crack-log', (req, res) => {
+    console.log('Test endpoint called');
+    console.log('Headers:', req.headers);
+    console.log('Body:', req.body);
+    console.log('Files:', req.files);
+    res.json({ 
+        success: true, 
+        message: 'Test endpoint working',
+        received: {
+            headers: req.headers,
+            body: req.body,
+            files: req.files
+        }
+    });
 });
 
 // Health check
