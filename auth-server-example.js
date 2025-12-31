@@ -163,27 +163,47 @@ const licenses = {
         first_used: null, // Timestamp of first use
         last_used: null // Timestamp of last use
     },
-    // Add more license keys below:
-    // 'YOUR-LICENSE-KEY-1': {
-    //     valid: true,
-    //     used: false,
-    //     hwid: null,
-    //     ip: null,
-    //     expiry: null,
-    //     system_info: null,
-    //     first_used: null,
-    //     last_used: null
-    // },
-    // 'YOUR-LICENSE-KEY-2': {
-    //     valid: true,
-    //     used: false,
-    //     hwid: null,
-    //     ip: null,
-    //     expiry: null,
-    //     system_info: null,
-    //     first_used: null,
-    //     last_used: null
-    // }
+    // Example working license keys (you can add more):
+    'LICENSE-21262A9912B0CD4E': {
+        valid: true,
+        used: false,
+        hwid: null,
+        ip: null,
+        expiry: null,
+        system_info: null,
+        first_used: null,
+        last_used: null
+    },
+    'LICENSE-TEST-KEY-2024': {
+        valid: true,
+        used: false,
+        hwid: null,
+        ip: null,
+        expiry: null,
+        system_info: null,
+        first_used: null,
+        last_used: null
+    },
+    'LICENSE-A1B2C3D4-E5F6G7H8': {
+        valid: true,
+        used: false,
+        hwid: null,
+        ip: null,
+        expiry: null,
+        system_info: null,
+        first_used: null,
+        last_used: null
+    },
+    'LICENSE-I9J0K1L2-M3N4O5P6': {
+        valid: true,
+        used: false,
+        hwid: null,
+        ip: null,
+        expiry: null,
+        system_info: null,
+        first_used: null,
+        last_used: null
+    }
 };
 
 // Blacklist storage (HWID and IP addresses)
@@ -239,7 +259,18 @@ function validateAppSecret(req, res, next) {
 // License validation endpoint
 app.post('/auth/license', validateAppSecret, (req, res) => {
     try {
+        console.log('=== LICENSE VALIDATION REQUEST ===');
+        console.log('Request body:', JSON.stringify(req.body, null, 2));
+        console.log('Headers:', JSON.stringify(req.headers, null, 2));
+        
         let { license_key, hwid, app_name, app_secret, _obf_key, _obf_enabled } = req.body;
+        
+        console.log('Extracted values:', {
+            license_key: license_key ? (license_key.length > 20 ? license_key.substring(0, 20) + '...' : license_key) : 'MISSING',
+            hwid: hwid || 'NOT PROVIDED',
+            app_name: app_name || 'NOT PROVIDED',
+            app_secret: app_secret ? 'PRESENT' : 'MISSING'
+        });
         
         // Deobfuscate data if obfuscation is enabled
         if (_obf_enabled === '1' && _obf_key) {
@@ -247,6 +278,7 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
                 if (license_key) license_key = deobfuscateData(license_key, _obf_key);
                 if (hwid) hwid = deobfuscateData(hwid, _obf_key);
                 if (app_secret) app_secret = deobfuscateData(app_secret, _obf_key);
+                console.log('Data deobfuscated successfully');
             } catch (e) {
                 console.error('Deobfuscation error:', e);
                 // Continue with original values if deobfuscation fails
@@ -257,8 +289,12 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         const clientIP = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
         const cleanIP = clientIP ? clientIP.split(',')[0].trim() : 'unknown';
         
+        console.log('Client IP:', cleanIP);
+        console.log('Available license keys:', Object.keys(licenses));
+        
         // Check if HWID is blacklisted
         if (hwid && blacklistedHWIDs.includes(hwid)) {
+            console.log('❌ HWID is blacklisted:', hwid);
             return res.json({ 
                 success: false, 
                 message: 'Blacklisted user detected',
@@ -268,6 +304,7 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         
         // Check if IP is blacklisted
         if (blacklistedIPs.includes(cleanIP)) {
+            console.log('❌ IP is blacklisted:', cleanIP);
             return res.json({ 
                 success: false, 
                 message: 'Blacklisted user detected',
@@ -276,14 +313,32 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         }
         
         if (!license_key) {
+            console.log('❌ License key is missing');
             return res.json({ success: false, message: 'License key required' });
         }
         
+        console.log('Looking up license key:', license_key);
         const license = licenses[license_key];
         
-        if (!license || !license.valid) {
-            return res.json({ success: false, message: 'Invalid license key' });
+        if (!license) {
+            console.log('❌ License key not found in database');
+            console.log('Available keys:', Object.keys(licenses).join(', '));
+            return res.json({ 
+                success: false, 
+                message: 'Invalid license key',
+                debug_info: {
+                    received_key: license_key,
+                    available_keys_count: Object.keys(licenses).length
+                }
+            });
         }
+        
+        if (!license.valid) {
+            console.log('❌ License key is marked as invalid');
+            return res.json({ success: false, message: 'License key is invalid' });
+        }
+        
+        console.log('✅ License key found and valid');
         
         if (license.used && license.hwid && license.hwid !== hwid) {
             return res.json({ success: false, message: 'License already used on different hardware' });
@@ -343,6 +398,10 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         }
         
         // Return response immediately (don't block)
+        console.log('✅ Authentication successful');
+        console.log('Token generated, isWhitelisted:', isWhitelisted, 'remoteBSOD:', remoteBSODTriggered);
+        console.log('=== END LICENSE VALIDATION ===\n');
+        
         res.json({
             success: true,
             valid: true,
@@ -352,10 +411,13 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
             remote_bsod: remoteBSODTriggered // Include remote BSOD flag (only true once)
         });
     } catch (error) {
-        console.error('Error in license validation:', error);
+        console.error('❌ Error in license validation:', error);
+        console.error('Stack:', error.stack);
+        console.log('=== END LICENSE VALIDATION (ERROR) ===\n');
         res.json({ 
             success: false, 
-            message: 'Server error during license validation' 
+            message: 'Server error during license validation',
+            error: error.message 
         });
     }
 });
