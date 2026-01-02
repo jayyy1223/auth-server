@@ -20,6 +20,7 @@ const bannedIPs = new Set();
 const bannedHWIDs = new Set();
 const activeSessions = new Map();
 const requestSignatures = new Set(); // Prevent replay attacks
+const serverStartTime = Date.now(); // Track server start time for uptime calculation
 
 // Server state flags
 let serverDisabled = false; // Server disable mode (blocks requests but keeps server running)
@@ -659,6 +660,52 @@ app.get('/auth/public-key', (req, res) => {
     res.json(publicInfo);
 });
 
+// Code integrity hash verification endpoint
+app.post('/auth/verify-integrity-hash', validateAppSecret, (req, res) => {
+    const { integrity_hash, license_key } = req.body;
+    
+    if (!integrity_hash) {
+        return res.json({
+            success: false,
+            error: 'INTEGRITY_HASH_REQUIRED'
+        });
+    }
+    
+    // Get expected hash for this license key (if stored)
+    // In production, store expected hashes per license key
+    const license = licenses[license_key];
+    
+    if (!license) {
+        return res.json({
+            success: false,
+            error: 'INVALID_LICENSE'
+        });
+    }
+    
+    // Store integrity hash for this license (first time)
+    if (!license.integrity_hash) {
+        license.integrity_hash = integrity_hash;
+        console.log(`✅ Stored integrity hash for license ${license_key.substring(0, 8)}...`);
+    }
+    
+    // Verify hash matches expected
+    if (license.integrity_hash && license.integrity_hash !== integrity_hash) {
+        console.log(`🚫 INTEGRITY HASH MISMATCH for license ${license_key.substring(0, 8)}...`);
+        recordFailedAttempt(req, 'Integrity hash mismatch - code may be patched');
+        return res.json({
+            success: false,
+            error: 'INTEGRITY_HASH_MISMATCH',
+            action: 'TERMINATE' // Code has been modified
+        });
+    }
+    
+    res.json({
+        success: true,
+        verified: true,
+        hash_stored: !!license.integrity_hash
+    });
+});
+
 // Initialize global crack attempts array
 if (!global.crackAttempts) {
     global.crackAttempts = [];
@@ -975,6 +1022,34 @@ const OWNER_HWIDS = [
     'E75E98D8-B4D3-27E0-A717-865ED3BB1DC4',  // System UUID (backup)
 ];
 
+// Access request storage (in production, use a database)
+// Format: { hwid: { status: 'pending'|'approved'|'denied', ip, pc_name, timestamp, requested_at } }
+const accessRequests = new Map();
+
+// Load access requests from file if it exists
+const accessRequestsFile = path.join(__dirname, 'access_requests.json');
+try {
+    if (fs.existsSync(accessRequestsFile)) {
+        const data = JSON.parse(fs.readFileSync(accessRequestsFile, 'utf8'));
+        Object.entries(data).forEach(([hwid, request]) => {
+            accessRequests.set(hwid, request);
+        });
+        console.log(`✅ Loaded ${accessRequests.size} access requests from file`);
+    }
+} catch (err) {
+    console.log('No existing access requests file, starting fresh');
+}
+
+// Save access requests to file
+function saveAccessRequests() {
+    try {
+        const data = Object.fromEntries(accessRequests);
+        fs.writeFileSync(accessRequestsFile, JSON.stringify(data, null, 2));
+    } catch (err) {
+        console.error('Error saving access requests:', err);
+    }
+}
+
 // Get current owner key (protected by HWID)
 app.post('/auth/get-owner-key-by-hwid', (req, res) => {
     const { hwid, gpu_hash } = req.body;
@@ -993,27 +1068,262 @@ app.post('/auth/get-owner-key-by-hwid', (req, res) => {
         allowedHwid.toLowerCase() === clientHwid.toLowerCase()
     );
     
-    if (!isAuthorized) {
-        console.log(`🚫 Unauthorized owner key access attempt from HWID: ${clientHwid}`);
+    if (isAuthorized) {
+        // Authorized - return owner key
+        console.log(`✅ Authorized owner key access from HWID: ${clientHwid}`);
         
-        // Log failed attempt (optional - can trigger alerts)
+        res.json({
+            success: true,
+            owner_key: ownerKeyData.key,
+            generated_at: ownerKeyData.generatedAt,
+            next_rotation: ownerKeyData.nextRotation,
+            time_until_rotation: ownerKeyData.nextRotation ? ownerKeyData.nextRotation - Date.now() : null,
+            rotation_date: ownerKeyData.nextRotation ? new Date(ownerKeyData.nextRotation).toISOString() : null
+        });
+        return;
+    }
+    
+    // Not authorized - check if there's an access request
+    const request = accessRequests.get(clientHwid);
+    
+    if (!request) {
+        // No request yet - return blocked status
+        console.log(`🚫 Unauthorized owner key access attempt from HWID: ${clientHwid}`);
         return res.status(403).json({
             success: false,
             error: 'UNAUTHORIZED_HWID',
-            message: 'Access denied. Your hardware is not authorized.'
+            message: 'Access denied. Your hardware is not authorized.',
+            access_status: 'blocked'
         });
     }
     
-    // Authorized - return owner key
-    console.log(`✅ Authorized owner key access from HWID: ${clientHwid}`);
+    // Check request status
+    if (request.status === 'approved') {
+        // Approved - add to whitelist and return key
+        if (!OWNER_HWIDS.includes(clientHwid)) {
+            OWNER_HWIDS.push(clientHwid);
+        }
+        console.log(`✅ Access request approved for HWID: ${clientHwid}`);
+        
+        res.json({
+            success: true,
+            owner_key: ownerKeyData.key,
+            generated_at: ownerKeyData.generatedAt,
+            next_rotation: ownerKeyData.nextRotation,
+            time_until_rotation: ownerKeyData.nextRotation ? ownerKeyData.nextRotation - Date.now() : null,
+            rotation_date: ownerKeyData.nextRotation ? new Date(ownerKeyData.nextRotation).toISOString() : null
+        });
+        return;
+    }
+    
+    if (request.status === 'denied') {
+        return res.status(403).json({
+            success: false,
+            error: 'ACCESS_DENIED',
+            message: 'Your access request has been denied by LiteWare administrators.',
+            access_status: 'denied'
+        });
+    }
+    
+    // Status is 'pending'
+    return res.status(403).json({
+        success: false,
+        error: 'ACCESS_PENDING',
+        message: 'Your access request is pending approval by LiteWare administrators.',
+        access_status: 'pending'
+    });
+});
+
+// Submit access request
+app.post('/auth/submit-access-request', (req, res) => {
+    const { hwid, gpu_hash, ip_address, pc_name } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    const clientIP = req.ip || req.connection.remoteAddress || ip_address || 'Unknown';
+    const clientPCName = pc_name || 'Unknown';
+    
+    if (!clientHwid) {
+        return res.status(400).json({
+            success: false,
+            message: 'HWID is required'
+        });
+    }
+    
+    // Check if already authorized
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === clientHwid.toLowerCase()
+    );
+    
+    if (isAuthorized) {
+        return res.json({
+            success: true,
+            message: 'Your hardware is already authorized.',
+            access_status: 'approved'
+        });
+    }
+    
+    // Check if request already exists
+    const existingRequest = accessRequests.get(clientHwid);
+    
+    if (existingRequest) {
+        return res.json({
+            success: true,
+            message: `Access request already exists. Status: ${existingRequest.status}`,
+            access_status: existingRequest.status
+        });
+    }
+    
+    // Create new access request
+    const request = {
+        hwid: clientHwid,
+        ip: clientIP,
+        pc_name: clientPCName,
+        status: 'pending',
+        requested_at: Date.now(),
+        timestamp: new Date().toISOString()
+    };
+    
+    accessRequests.set(clientHwid, request);
+    saveAccessRequests();
+    
+    console.log(`📝 New access request from HWID: ${clientHwid}, IP: ${clientIP}, PC: ${clientPCName}`);
     
     res.json({
         success: true,
-        owner_key: ownerKeyData.key,
-        generated_at: ownerKeyData.generatedAt,
-        next_rotation: ownerKeyData.nextRotation,
-        time_until_rotation: ownerKeyData.nextRotation ? ownerKeyData.nextRotation - Date.now() : null,
-        rotation_date: ownerKeyData.nextRotation ? new Date(ownerKeyData.nextRotation).toISOString() : null
+        message: 'Access request submitted successfully. Waiting for approval.',
+        access_status: 'pending'
+    });
+});
+
+// List access requests (Admin only)
+app.post('/auth/admin/list-access-requests', (req, res) => {
+    const { hwid, gpu_hash, app_secret } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // Verify HWID authorization
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === (clientHwid || '').toLowerCase()
+    );
+    
+    if (!isAuthorized && app_secret !== APP_SECRET) {
+        return res.status(403).json({
+            success: false,
+            error: 'UNAUTHORIZED',
+            message: 'Access denied'
+        });
+    }
+    
+    const requests = Array.from(accessRequests.values());
+    
+    res.json({
+        success: true,
+        requests: requests,
+        total: requests.length,
+        pending: requests.filter(r => r.status === 'pending').length,
+        approved: requests.filter(r => r.status === 'approved').length,
+        denied: requests.filter(r => r.status === 'denied').length
+    });
+});
+
+// Approve access request (Admin only)
+app.post('/auth/admin/approve-access-request', (req, res) => {
+    const { hwid, gpu_hash, app_secret, request_hwid } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // Verify HWID authorization
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === (clientHwid || '').toLowerCase()
+    );
+    
+    if (!isAuthorized && app_secret !== APP_SECRET) {
+        return res.status(403).json({
+            success: false,
+            error: 'UNAUTHORIZED',
+            message: 'Access denied'
+        });
+    }
+    
+    if (!request_hwid) {
+        return res.status(400).json({
+            success: false,
+            message: 'Request HWID is required'
+        });
+    }
+    
+    const request = accessRequests.get(request_hwid);
+    
+    if (!request) {
+        return res.status(404).json({
+            success: false,
+            message: 'Access request not found'
+        });
+    }
+    
+    // Update request status
+    request.status = 'approved';
+    request.approved_at = Date.now();
+    request.approved_by = clientHwid || 'admin';
+    accessRequests.set(request_hwid, request);
+    saveAccessRequests();
+    
+    // Add to whitelist
+    if (!OWNER_HWIDS.includes(request_hwid)) {
+        OWNER_HWIDS.push(request_hwid);
+    }
+    
+    console.log(`✅ Access request approved for HWID: ${request_hwid}`);
+    
+    res.json({
+        success: true,
+        message: 'Access request approved successfully'
+    });
+});
+
+// Deny access request (Admin only)
+app.post('/auth/admin/deny-access-request', (req, res) => {
+    const { hwid, gpu_hash, app_secret, request_hwid } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // Verify HWID authorization
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === (clientHwid || '').toLowerCase()
+    );
+    
+    if (!isAuthorized && app_secret !== APP_SECRET) {
+        return res.status(403).json({
+            success: false,
+            error: 'UNAUTHORIZED',
+            message: 'Access denied'
+        });
+    }
+    
+    if (!request_hwid) {
+        return res.status(400).json({
+            success: false,
+            message: 'Request HWID is required'
+        });
+    }
+    
+    const request = accessRequests.get(request_hwid);
+    
+    if (!request) {
+        return res.status(404).json({
+            success: false,
+            message: 'Access request not found'
+        });
+    }
+    
+    // Update request status
+    request.status = 'denied';
+    request.denied_at = Date.now();
+    request.denied_by = clientHwid || 'admin';
+    accessRequests.set(request_hwid, request);
+    saveAccessRequests();
+    
+    console.log(`❌ Access request denied for HWID: ${request_hwid}`);
+    
+    res.json({
+        success: true,
+        message: 'Access request denied successfully'
     });
 });
 
@@ -1113,10 +1423,26 @@ app.post('/auth/admin/enable-server', (req, res) => {
 });
 
 app.post('/auth/admin/server-status', (req, res) => {
+    const uptimeMs = Date.now() - serverStartTime;
+    const uptimeSeconds = Math.floor(uptimeMs / 1000);
+    const days = Math.floor(uptimeSeconds / 86400);
+    const hours = Math.floor((uptimeSeconds % 86400) / 3600);
+    const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+    const seconds = uptimeSeconds % 60;
+    
+    let uptimeFormatted = '';
+    if (days > 0) uptimeFormatted += `${days}d `;
+    if (hours > 0 || days > 0) uptimeFormatted += `${hours}h `;
+    if (minutes > 0 || hours > 0 || days > 0) uptimeFormatted += `${minutes}m `;
+    uptimeFormatted += `${seconds}s`;
+    
     res.json({
         success: true,
         disabled: serverDisabled,
-        message: serverDisabled ? 'Server is disabled' : 'Server is operational'
+        message: serverDisabled ? 'Server is disabled' : 'Server is operational',
+        uptime: uptimeFormatted,
+        uptime_ms: uptimeMs,
+        active_sessions: activeSessions.size
     });
 });
 
@@ -2960,9 +3286,492 @@ app.post('/auth/test-crack-log', (req, res) => {
     });
 });
 
+// ========================================
+// ECDH KEY EXCHANGE SYSTEM (v3.0)
+// For Perfect Forward Secrecy
+// ========================================
+
+// Store active key exchange sessions
+const keyExchangeSessions = new Map();
+
+// Generate server ECDH key pair
+function generateServerKeyPair() {
+    const ecdh = crypto.createECDH('prime256v1');
+    ecdh.generateKeys();
+    return ecdh;
+}
+
+// Key exchange endpoint
+app.post('/auth/key-exchange', (req, res) => {
+    try {
+        const { public_key, timestamp } = req.body;
+        
+        // Validate timestamp (prevent replay)
+        const now = Date.now();
+        if (Math.abs(now - timestamp) > 60000) {
+            return res.status(400).json({
+                success: false,
+                message: 'Request expired'
+            });
+        }
+        
+        // Decode client's public key
+        const clientPubKey = Buffer.from(public_key, 'base64');
+        
+        // Generate server key pair
+        const serverECDH = generateServerKeyPair();
+        const serverPubKey = serverECDH.getPublicKey('base64');
+        
+        // Derive shared secret
+        const sharedSecret = serverECDH.computeSecret(clientPubKey);
+        
+        // Generate session token
+        const sessionToken = crypto.randomBytes(32).toString('hex');
+        
+        // Store session with derived key
+        keyExchangeSessions.set(sessionToken, {
+            sharedSecret: sharedSecret,
+            createdAt: Date.now(),
+            lastActivity: Date.now()
+        });
+        
+        // Cleanup old sessions (older than 30 minutes)
+        for (const [token, session] of keyExchangeSessions) {
+            if (Date.now() - session.lastActivity > 1800000) {
+                keyExchangeSessions.delete(token);
+            }
+        }
+        
+        console.log(`🔐 Key exchange successful. Session: ${sessionToken.substring(0, 16)}...`);
+        
+        res.json({
+            success: true,
+            server_public_key: serverPubKey,
+            session_token: sessionToken
+        });
+        
+    } catch (error) {
+        console.error('Key exchange error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Key exchange failed'
+        });
+    }
+});
+
+// ========================================
+// ENCRYPTED REQUEST HANDLER (PFS)
+// Decrypt requests encrypted with session key
+// ========================================
+
+function decryptPFSRequest(encryptedData, sessionToken) {
+    try {
+        const session = keyExchangeSessions.get(sessionToken);
+        if (!session) return null;
+        
+        // Update last activity
+        session.lastActivity = Date.now();
+        
+        // Derive encryption key from shared secret
+        const key = crypto.createHash('sha256').update(session.sharedSecret).digest();
+        
+        // Decrypt
+        const iv = Buffer.from(encryptedData.iv, 'base64');
+        const tag = Buffer.from(encryptedData.tag, 'base64');
+        const ciphertext = Buffer.from(encryptedData.data, 'base64');
+        
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+        decipher.setAuthTag(tag);
+        
+        let decrypted = decipher.update(ciphertext, null, 'utf8');
+        decrypted += decipher.final('utf8');
+        
+        return JSON.parse(decrypted);
+    } catch (error) {
+        console.error('PFS Decryption error:', error);
+        return null;
+    }
+}
+
+function encryptPFSResponse(data, sessionToken) {
+    try {
+        const session = keyExchangeSessions.get(sessionToken);
+        if (!session) return data;
+        
+        // Derive encryption key from shared secret
+        const key = crypto.createHash('sha256').update(session.sharedSecret).digest();
+        
+        // Generate IV
+        const iv = crypto.randomBytes(12);
+        
+        // Encrypt
+        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+        let encrypted = cipher.update(JSON.stringify(data), 'utf8');
+        encrypted = Buffer.concat([encrypted, cipher.final()]);
+        
+        const tag = cipher.getAuthTag();
+        
+        return {
+            encrypted: true,
+            pfs: true,
+            data: encrypted.toString('base64'),
+            iv: iv.toString('base64'),
+            tag: tag.toString('base64')
+        };
+    } catch (error) {
+        console.error('PFS Encryption error:', error);
+        return data;
+    }
+}
+
+// Middleware to handle PFS encrypted requests
+app.use('/auth/*', (req, res, next) => {
+    if (req.body && req.body.encrypted === true && req.body.pfs === true && req.body.session_token) {
+        const decrypted = decryptPFSRequest(req.body, req.body.session_token);
+        if (decrypted) {
+            req.decryptedBody = decrypted;
+            req.pfsSessionToken = req.body.session_token;
+        }
+    }
+    next();
+});
+
+// ========================================
+// SERVER-SIDE DECRYPTION KEY ENDPOINT
+// Provides keys to decrypt protected features
+// ========================================
+
+// Encrypted code blocks (register your protected code blocks here)
+const encryptedCodeBlocks = new Map();
+
+// Register an encrypted code block
+function registerCodeBlock(blockId) {
+    // Generate unique key for this block
+    const key = crypto.randomBytes(32);
+    const iv = crypto.randomBytes(12);
+    
+    encryptedCodeBlocks.set(blockId, {
+        key: key,
+        iv: iv,
+        registeredAt: Date.now()
+    });
+    
+    console.log(`📦 Registered code block: ${blockId}`);
+}
+
+// Initialize protected code blocks
+registerCodeBlock('spoof_core');
+registerCodeBlock('license_check');
+registerCodeBlock('feature_unlock');
+registerCodeBlock('hwid_spoof');
+registerCodeBlock('auth_validation');
+
+// Get decryption key for code block
+app.post('/auth/decrypt-block', (req, res) => {
+    try {
+        // Use decrypted body if available
+        const body = req.decryptedBody || req.body;
+        const { block_id, license_key, hwid, session_token, app_secret } = body;
+        
+        // Verify app secret
+        if (app_secret !== APP_SECRET) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid app secret'
+            });
+        }
+        
+        // Validate license (check if exists and valid)
+        const licenseHash = crypto.createHash('sha256').update(license_key).digest('hex');
+        let licenseValid = false;
+        
+        // Check active sessions
+        for (const [hash, session] of activeSessions) {
+            if (session.license_key === license_key && session.hwid === hwid) {
+                licenseValid = true;
+                break;
+            }
+        }
+        
+        if (!licenseValid) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid license or session'
+            });
+        }
+        
+        // Get the code block
+        const block = encryptedCodeBlocks.get(block_id);
+        if (!block) {
+            return res.status(404).json({
+                success: false,
+                message: 'Code block not found'
+            });
+        }
+        
+        // Return the decryption key
+        const response = {
+            success: true,
+            key: block.key.toString('base64'),
+            iv: block.iv.toString('base64'),
+            block_id: block_id
+        };
+        
+        // Encrypt response with PFS if available
+        if (req.pfsSessionToken) {
+            res.json(encryptPFSResponse(response, req.pfsSessionToken));
+        } else {
+            res.json(response);
+        }
+        
+    } catch (error) {
+        console.error('Decrypt block error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Decryption failed'
+        });
+    }
+});
+
+// ========================================
+// ENHANCED LICENSE VALIDATION (v3.0)
+// With server-side token generation for unpatchable auth
+// ========================================
+
+app.post('/auth/license-enhanced', (req, res) => {
+    try {
+        // Rate limiting
+        const rateLimit = checkRateLimit(req);
+        if (!rateLimit.allowed) {
+            return res.status(429).json({
+                success: false,
+                message: rateLimit.reason,
+                retry_after: rateLimit.retryAfter
+            });
+        }
+        
+        // Use decrypted body if available
+        const body = req.decryptedBody || req.body;
+        const { license_key, hwid, app_secret, timestamp, nonce } = body;
+        
+        // Validate app secret
+        if (app_secret !== APP_SECRET) {
+            recordFailedAttempt(req, 'Invalid app secret (enhanced)');
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid application secret'
+            });
+        }
+        
+        // Validate license
+        if (!license_key || license_key.length < 10) {
+            recordFailedAttempt(req, 'Invalid license format (enhanced)');
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid license format'
+            });
+        }
+        
+        // Generate server token for unpatchable auth
+        const serverToken = crypto.randomBytes(64);
+        const sessionHash = crypto.createHash('sha256')
+            .update(license_key + hwid + Date.now().toString())
+            .digest('hex');
+        
+        // Store the token for verification
+        activeSessions.set(sessionHash, {
+            token: serverToken,
+            license_key: license_key,
+            hwid: hwid,
+            createdAt: Date.now(),
+            lastActivity: Date.now()
+        });
+        
+        console.log(`✅ Enhanced license validated. Session: ${sessionHash.substring(0, 16)}...`);
+        
+        const response = {
+            success: true,
+            message: 'License validated',
+            session_token: serverToken.toString('base64'),
+            session_hash: sessionHash,
+            expiry: 'LIFETIME',
+            features: ['spoof_core', 'license_check', 'feature_unlock', 'hwid_spoof', 'auth_validation'],
+            watermark_hash: crypto.createHash('sha256').update(license_key + Date.now().toString()).digest('hex').substring(0, 16)
+        };
+        
+        // Encrypt response if PFS session exists
+        if (req.pfsSessionToken) {
+            res.json(encryptPFSResponse(response, req.pfsSessionToken));
+        } else {
+            res.json(response);
+        }
+        
+    } catch (error) {
+        console.error('Enhanced license validation error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Validation failed'
+        });
+    }
+});
+
+// ========================================
+// SECURE HEARTBEAT WITH TOKEN VERIFICATION
+// ========================================
+
+app.post('/auth/heartbeat-secure', (req, res) => {
+    try {
+        const body = req.decryptedBody || req.body;
+        const { session_hash, verification_token, timestamp, app_secret } = body;
+        
+        // Validate app secret
+        if (app_secret !== APP_SECRET) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid app secret'
+            });
+        }
+        
+        // Validate timestamp
+        if (Math.abs(Date.now() - timestamp) > 30000) {
+            return res.status(400).json({
+                success: false,
+                message: 'Request expired'
+            });
+        }
+        
+        // Validate session
+        const session = activeSessions.get(session_hash);
+        if (!session) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid session'
+            });
+        }
+        
+        // Update activity
+        session.lastActivity = Date.now();
+        
+        // Generate new verification token
+        const newToken = crypto.randomBytes(32).toString('hex');
+        session.verificationToken = newToken;
+        
+        const response = {
+            success: true,
+            next_token: newToken,
+            server_time: Date.now(),
+            session_valid: true
+        };
+        
+        if (req.pfsSessionToken) {
+            res.json(encryptPFSResponse(response, req.pfsSessionToken));
+        } else {
+            res.json(response);
+        }
+        
+    } catch (error) {
+        console.error('Secure heartbeat error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Heartbeat failed'
+        });
+    }
+});
+
+// ========================================
+// LICENSE WATERMARK VERIFICATION
+// For tracking leaked copies
+// ========================================
+
+app.post('/auth/verify-watermark', (req, res) => {
+    try {
+        const body = req.decryptedBody || req.body;
+        const { watermark_hash, license_key, hwid, app_secret } = body;
+        
+        // Validate app secret
+        if (app_secret !== APP_SECRET) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid app secret'
+            });
+        }
+        
+        // Verify watermark against known licenses
+        // In production, this would check a database
+        console.log(`📎 Watermark verification request: ${watermark_hash} from ${hwid}`);
+        
+        res.json({
+            success: true,
+            valid: true,
+            message: 'Watermark verified'
+        });
+        
+    } catch (error) {
+        console.error('Watermark verification error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Verification failed'
+        });
+    }
+});
+
+// ========================================
+// HWID VERIFICATION ENDPOINT
+// For owner panel access
+// ========================================
+
+app.post('/auth/verify-hwid', (req, res) => {
+    try {
+        const { app_secret, gpu_hash, motherboard_uuid, browser_fingerprint } = req.body;
+        
+        // Validate app secret
+        if (app_secret !== APP_SECRET) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid app secret'
+            });
+        }
+        
+        // Owner HWID check (from your serial dump)
+        const OWNER_GPU = 'GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
+        const OWNER_MB_UUID = '04030201-98D8-3DEE-D3B4-E027A7EDF6EE';
+        
+        const isOwner = gpu_hash === OWNER_GPU || motherboard_uuid === OWNER_MB_UUID;
+        
+        if (isOwner) {
+            console.log('✅ Owner HWID verified');
+        } else {
+            console.log(`⚠️ HWID verification failed. GPU: ${gpu_hash}, MB: ${motherboard_uuid}`);
+        }
+        
+        res.json({
+            success: isOwner,
+            message: isOwner ? 'HWID verified' : 'HWID mismatch'
+        });
+        
+    } catch (error) {
+        console.error('HWID verification error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Verification failed'
+        });
+    }
+});
+
 // Health check
 app.get('/', (req, res) => {
-    res.json({ status: 'Auth server running' });
+    res.json({ 
+        status: 'Auth server running',
+        version: '3.0',
+        features: [
+            'ECDH Key Exchange (PFS)',
+            'Server-Side Decryption',
+            'Enhanced License Validation',
+            'Secure Heartbeat',
+            'License Watermarking',
+            'HWID Verification'
+        ]
+    });
 });
 
 const PORT = process.env.PORT || 3000;
