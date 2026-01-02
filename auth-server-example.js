@@ -618,12 +618,22 @@ app.post('/auth/generate-key', validateAppSecret, (req, res) => {
 app.post('/auth/list-keys', validateAppSecret, (req, res) => {
     const keysList = Object.keys(licenses).map(key => {
         const license = licenses[key];
+        // Determine status based on used and valid fields
+        let status = 'Unknown';
+        if (license.valid && license.used) {
+            status = 'Active';
+        } else if (license.valid && !license.used) {
+            status = 'Valid';
+        } else if (!license.valid) {
+            status = 'Invalid';
+        }
         return {
             key: key,
             valid: license.valid,
             used: license.used,
-            hwid: license.hwid,
-            ip: license.ip,
+            status: status, // Add status field for dashboard
+            hwid: license.hwid || null,
+            ip: license.ip || null,
             expiry: license.expiry // Return ISO string, client will format it
         };
     });
