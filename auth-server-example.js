@@ -1032,6 +1032,8 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
     console.log('Content-Type:', req.headers['content-type']);
     console.log('Method:', req.method);
     console.log('URL:', req.url);
+    console.log('Request IP:', req.ip || req.connection.remoteAddress || 'Unknown');
+    console.log('Request headers:', JSON.stringify(req.headers, null, 2));
     
     // Check content type to determine if multipart
     const contentType = req.headers['content-type'] || '';
@@ -1168,6 +1170,7 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
 function handleJsonCrackAttempt(req, res) {
     console.log('=== HANDLING JSON CRACK ATTEMPT ===');
     console.log('Request body:', JSON.stringify(req.body, null, 2));
+    console.log('Request IP:', req.ip || req.connection.remoteAddress || 'Unknown');
     
     const { 
         attempt_number, 
@@ -1195,6 +1198,9 @@ function handleJsonCrackAttempt(req, res) {
         loadCrackLogsFromFile();
     }
     
+    // Get IP from request if not provided
+    const finalIPAddress = ip_address || req.ip || req.connection.remoteAddress || 'Unknown';
+    
     // Create log entry with unique ID
     const logEntry = {
         attempt_number: parseInt(attempt_number) || 0,
@@ -1206,7 +1212,7 @@ function handleJsonCrackAttempt(req, res) {
         discord_id: discord_id || 'Not found',
         discord_name: discord_name || 'Not found',
         hwid: hwid || 'Unknown',
-        ip_address: ip_address || 'Unknown',
+        ip_address: finalIPAddress,
         unique_id: finalUniqueId || `${attempt_number}_${Date.now()}_${Math.random().toString(36).substring(7)}`,
         screenshot_filename: null,
         screenshot_path: null,
