@@ -295,6 +295,11 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         console.log('Client IP:', cleanIP);
         console.log('Available license keys:', Object.keys(licenses));
         
+        // Determine final HWID to use (prefer GPU hash, fallback to HWID)
+        const finalHwid = gpu_hash || hwid || null;
+        
+        console.log('Final HWID determined:', finalHwid ? (finalHwid.length > 20 ? finalHwid.substring(0, 20) + '...' : finalHwid) : 'NOT PROVIDED');
+        
         // Check if HWID (or GPU hash) is blacklisted
         if (finalHwid && blacklistedHWIDs.includes(finalHwid)) {
             console.log('❌ HWID/GPU Hash is blacklisted:', finalHwid);
@@ -1324,7 +1329,7 @@ app.post('/auth/get-crack-logs', validateAppSecret, (req, res) => {
     
     // ALWAYS reload from file to ensure we have latest data
     try {
-        loadCrackLogsFromFile();
+    loadCrackLogsFromFile();
     } catch (error) {
         console.error('Error loading logs from file in get-crack-logs:', error);
         // Continue with in-memory data if file load fails
@@ -1333,12 +1338,12 @@ app.post('/auth/get-crack-logs', validateAppSecret, (req, res) => {
     console.log(`=== GET CRACK LOGS REQUEST ===`);
     console.log(`Total stored: ${global.crackAttempts.length}, Requesting: ${limit}`);
     if (global.crackAttempts.length > 0) {
-        console.log('First 3 entries:', global.crackAttempts.slice(0, 3).map(e => ({ 
-            attempt: e.attempt_number, 
-            reason: e.reason, 
-            timestamp: e.timestamp,
-            unique_id: e.unique_id 
-        })));
+    console.log('First 3 entries:', global.crackAttempts.slice(0, 3).map(e => ({ 
+        attempt: e.attempt_number, 
+        reason: e.reason, 
+        timestamp: e.timestamp,
+        unique_id: e.unique_id 
+    })));
     } else {
         console.log('No logs found in memory or file');
     }
