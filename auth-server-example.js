@@ -1,5 +1,5 @@
 // Liteware Advanced Authentication Server
-// Install dependencies: npm install express body-parser crypto
+// Install dependencies: npm install express body-parser crypto cors
 // SECURITY: This server implements military-grade protection
 
 const express = require('express');
@@ -8,6 +8,23 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const app = express();
+
+// ========================================
+// CORS CONFIGURATION (Allow browser requests)
+// ========================================
+app.use((req, res, next) => {
+    // Allow requests from any origin (for local file:// and web access)
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Max-Age', '86400'); // 24 hours
+    
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    next();
+});
 
 // ========================================
 // ADVANCED SECURITY CONFIGURATION
