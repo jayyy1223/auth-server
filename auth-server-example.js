@@ -1355,6 +1355,46 @@ app.post('/auth/list-keys', validateAppSecret, (req, res) => {
     });
 });
 
+// Retrieve license key info (Admin only)
+app.post('/auth/retrieve', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    
+    if (!license_key) {
+        return res.json({ success: false, message: 'License key required' });
+    }
+    
+    const license = licenses[license_key];
+    
+    if (!license) {
+        return res.json({ success: false, message: 'License key not found' });
+    }
+    
+    // Determine status
+    let status = 'Unknown';
+    if (license.valid && license.used) {
+        status = 'Active';
+    } else if (license.valid && !license.used) {
+        status = 'Unused';
+    } else if (!license.valid) {
+        status = 'Invalid';
+    }
+    
+    res.json({
+        success: true,
+        license_key: license_key,
+        hwid: license.hwid || null,
+        gpu_hash: license.gpu_hash || null,
+        ip: license.ip || null,
+        status: status,
+        valid: license.valid,
+        used: license.used,
+        expiry: license.expiry || 'Lifetime',
+        first_used: license.first_used || null,
+        last_used: license.last_used || null,
+        system_info: license.system_info || null
+    });
+});
+
 // Reset HWID for a license key (Admin only)
 app.post('/auth/reset-hwid', validateAppSecret, (req, res) => {
     const { license_key } = req.body;
