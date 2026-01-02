@@ -935,7 +935,71 @@ function validateOwnerKeyMiddleware(req, res, next) {
     next();
 }
 
-// Get current owner key (protected endpoint)
+// ========================================
+// OWNER HWID WHITELIST
+// ========================================
+// Only these HWIDs/GPU hashes can access the owner key viewer page
+// 
+// TO GET YOUR HWID:
+// 1. Run your Liteware loader and authenticate
+// 2. Check the server logs - it will show the HWID/GPU hash
+// 3. Or check the license info in the dashboard for your license key
+// 4. Add your HWID and GPU hash below (case-insensitive)
+//
+// EXAMPLE:
+// const OWNER_HWIDS = [
+//     '705feb88-a559-5867-4172-3970f1ae66f5',  // Your GPU hash
+//     'COMPUTER-NAME'  // Your HWID (if different)
+// ];
+const OWNER_HWIDS = [
+    '7af1ba56-2242-cd8c-f9e3-cb91eede2235',  // GPU GUID (from hardware comparison)
+    'GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235',  // Full GPU GUID format
+    'E75E98D8-B4D3-27E0-A717-865ED3BB1DC4',  // System UUID (backup)
+];
+
+// Get current owner key (protected by HWID)
+app.post('/auth/get-owner-key-by-hwid', (req, res) => {
+    const { hwid, gpu_hash } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    if (!clientHwid) {
+        return res.status(400).json({
+            success: false,
+            error: 'HWID_REQUIRED',
+            message: 'HWID is required'
+        });
+    }
+    
+    // Check if HWID is in whitelist
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === clientHwid.toLowerCase()
+    );
+    
+    if (!isAuthorized) {
+        console.log(`🚫 Unauthorized owner key access attempt from HWID: ${clientHwid}`);
+        
+        // Log failed attempt (optional - can trigger alerts)
+        return res.status(403).json({
+            success: false,
+            error: 'UNAUTHORIZED_HWID',
+            message: 'Access denied. Your hardware is not authorized.'
+        });
+    }
+    
+    // Authorized - return owner key
+    console.log(`✅ Authorized owner key access from HWID: ${clientHwid}`);
+    
+    res.json({
+        success: true,
+        owner_key: ownerKeyData.key,
+        generated_at: ownerKeyData.generatedAt,
+        next_rotation: ownerKeyData.nextRotation,
+        time_until_rotation: ownerKeyData.nextRotation ? ownerKeyData.nextRotation - Date.now() : null,
+        rotation_date: ownerKeyData.nextRotation ? new Date(ownerKeyData.nextRotation).toISOString() : null
+    });
+});
+
+// Get current owner key (protected endpoint - admin only with app secret)
 app.post('/auth/get-owner-key', validateAppSecret, (req, res) => {
     res.json({
         success: true,
