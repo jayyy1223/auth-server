@@ -125,6 +125,9 @@ function saveCrackLogsToFile() {
             const tempFile = CRACK_LOGS_FILE + '.tmp';
             fs.writeFileSync(tempFile, JSON.stringify(global.crackAttempts, null, 2), 'utf8');
             fs.renameSync(tempFile, CRACK_LOGS_FILE);
+            console.log(`✅ Saved ${global.crackAttempts.length} crack logs to file`);
+        } else {
+            console.warn('⚠️ Cannot save logs: global.crackAttempts is not an array');
         }
     } catch (error) {
         console.error('❌ Error saving crack logs to file:', error.message);
@@ -1103,10 +1106,16 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
             console.log('Unique ID from request:', finalUniqueId);
             const screenshotFile = req.file;
             
-            // Initialize crack attempts array if it doesn't exist
-            if (!global.crackAttempts) {
+            // ALWAYS ensure array is initialized and loaded
+            if (!global.crackAttempts || !Array.isArray(global.crackAttempts)) {
                 global.crackAttempts = [];
+            }
+            // ALWAYS reload from file to ensure we have latest data
+            try {
                 loadCrackLogsFromFile();
+            } catch (error) {
+                console.error('Error loading logs from file in multipart handler:', error);
+                // Continue with in-memory data if file load fails
             }
             
             // Create log entry with unique ID to prevent duplicates
@@ -1213,10 +1222,16 @@ function handleJsonCrackAttempt(req, res) {
     const finalUniqueId = unique_id || unique_log_id;
     console.log('Unique ID from JSON request:', finalUniqueId);
     
-    // Initialize crack attempts array if it doesn't exist
-    if (!global.crackAttempts) {
+    // ALWAYS ensure array is initialized and loaded
+    if (!global.crackAttempts || !Array.isArray(global.crackAttempts)) {
         global.crackAttempts = [];
+    }
+    // ALWAYS reload from file to ensure we have latest data
+    try {
         loadCrackLogsFromFile();
+    } catch (error) {
+        console.error('Error loading logs from file in JSON handler:', error);
+        // Continue with in-memory data if file load fails
     }
     
     // Get IP from request if not provided
@@ -1301,22 +1316,32 @@ app.get('/auth/test', (req, res) => {
 app.post('/auth/get-crack-logs', validateAppSecret, (req, res) => {
     const { limit = 100 } = req.body;
     
-    if (!global.crackAttempts) {
+    // ALWAYS ensure array is initialized
+    if (!global.crackAttempts || !Array.isArray(global.crackAttempts)) {
         global.crackAttempts = [];
         console.log('Initialized global.crackAttempts array in get-crack-logs');
     }
     
-    // Reload from file to ensure we have latest data
-    loadCrackLogsFromFile();
+    // ALWAYS reload from file to ensure we have latest data
+    try {
+        loadCrackLogsFromFile();
+    } catch (error) {
+        console.error('Error loading logs from file in get-crack-logs:', error);
+        // Continue with in-memory data if file load fails
+    }
     
     console.log(`=== GET CRACK LOGS REQUEST ===`);
     console.log(`Total stored: ${global.crackAttempts.length}, Requesting: ${limit}`);
-    console.log('First 3 entries:', global.crackAttempts.slice(0, 3).map(e => ({ 
-        attempt: e.attempt_number, 
-        reason: e.reason, 
-        timestamp: e.timestamp,
-        unique_id: e.unique_id 
-    })));
+    if (global.crackAttempts.length > 0) {
+        console.log('First 3 entries:', global.crackAttempts.slice(0, 3).map(e => ({ 
+            attempt: e.attempt_number, 
+            reason: e.reason, 
+            timestamp: e.timestamp,
+            unique_id: e.unique_id 
+        })));
+    } else {
+        console.log('No logs found in memory or file');
+    }
     
     // Sort by received_at (most recent first) and return
     const sortedLogs = [...global.crackAttempts].sort((a, b) => {
