@@ -3733,6 +3733,445 @@ app.post('/auth/verify-watermark', (req, res) => {
 });
 
 // ========================================
+// ADMIN CONTROL ENDPOINTS (NEW)
+// ========================================
+
+// State variables for admin controls
+let lockdownMode = false;
+let authEnabled = true;
+let websiteLocked = false;
+
+// Get all status
+app.post('/auth/admin/get-all-status', validateAppSecret, (req, res) => {
+    res.json({
+        success: true,
+        lockdown: lockdownMode,
+        auth_enabled: authEnabled,
+        website_locked: websiteLocked,
+        maintenance: maintenanceMode,
+        server_enabled: !serverDisabled,
+        loader_enabled: !loaderDisabled
+    });
+});
+
+// Lockdown mode
+app.post('/auth/admin/lockdown', validateAppSecret, (req, res) => {
+    const { enabled } = req.body;
+    lockdownMode = !!enabled;
+    console.log(`🔒 Lockdown mode ${lockdownMode ? 'ACTIVATED' : 'deactivated'}`);
+    res.json({ success: true, lockdown: lockdownMode });
+});
+
+// Auth control
+app.post('/auth/admin/set-auth-status', validateAppSecret, (req, res) => {
+    const { enabled } = req.body;
+    authEnabled = enabled !== false;
+    console.log(`🔐 Authentication ${authEnabled ? 'enabled' : 'disabled'}`);
+    res.json({ success: true, auth_enabled: authEnabled });
+});
+
+// Website lock
+app.post('/auth/admin/set-website-lock', validateAppSecret, (req, res) => {
+    const { locked } = req.body;
+    websiteLocked = !!locked;
+    console.log(`🌐 Website ${websiteLocked ? 'locked' : 'unlocked'}`);
+    res.json({ success: true, website_locked: websiteLocked });
+});
+
+// Maintenance mode
+app.post('/auth/admin/set-maintenance', validateAppSecret, (req, res) => {
+    const { enabled } = req.body;
+    maintenanceMode = !!enabled;
+    console.log(`🔧 Maintenance mode ${maintenanceMode ? 'enabled' : 'disabled'}`);
+    res.json({ success: true, maintenance: maintenanceMode });
+});
+
+// Server status
+app.post('/auth/admin/set-server-status', validateAppSecret, (req, res) => {
+    const { enabled } = req.body;
+    serverDisabled = !enabled;
+    console.log(`🖥️ Server ${serverDisabled ? 'disabled' : 'enabled'}`);
+    res.json({ success: true, server_enabled: !serverDisabled });
+});
+
+// Bulk key generation
+app.post('/auth/admin/bulk-generate-keys', validateAppSecret, (req, res) => {
+    const count = Math.min(parseInt(req.body.count) || 5, 50);
+    const keys = [];
+    
+    for (let i = 0; i < count; i++) {
+        const key = 'LW-' + crypto.randomBytes(4).toString('hex').toUpperCase() + 
+                    '-' + crypto.randomBytes(4).toString('hex').toUpperCase() +
+                    '-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+        validLicenseKeys.add(key);
+        keys.push(key);
+    }
+    
+    console.log(`🔑 Generated ${keys.length} license keys`);
+    res.json({ success: true, keys, count: keys.length });
+});
+
+// Ban IP
+app.post('/auth/admin/ban-ip', validateAppSecret, (req, res) => {
+    const { ip } = req.body;
+    if (!ip) return res.status(400).json({ success: false, message: 'IP required' });
+    
+    bannedIPs.add(ip);
+    console.log(`🚫 IP banned: ${ip}`);
+    res.json({ success: true, message: 'IP banned', ip });
+});
+
+// Unban IP
+app.post('/auth/admin/unban-ip', validateAppSecret, (req, res) => {
+    const { ip } = req.body;
+    if (!ip) return res.status(400).json({ success: false, message: 'IP required' });
+    
+    bannedIPs.delete(ip);
+    // Also clear from rate limit store
+    rateLimitStore.delete(ip);
+    failedAttempts.delete(ip);
+    
+    console.log(`✅ IP unbanned: ${ip}`);
+    res.json({ success: true, message: 'IP unbanned', ip });
+});
+
+// Ban HWID
+app.post('/auth/admin/ban-hwid', validateAppSecret, (req, res) => {
+    const { hwid } = req.body;
+    if (!hwid) return res.status(400).json({ success: false, message: 'HWID required' });
+    
+    bannedHWIDs.add(hwid);
+    console.log(`🚫 HWID banned: ${hwid.substring(0, 20)}...`);
+    res.json({ success: true, message: 'HWID banned' });
+});
+
+// Unban HWID
+app.post('/auth/admin/unban-hwid', validateAppSecret, (req, res) => {
+    const { hwid } = req.body;
+    if (!hwid) return res.status(400).json({ success: false, message: 'HWID required' });
+    
+    bannedHWIDs.delete(hwid);
+    console.log(`✅ HWID unbanned: ${hwid.substring(0, 20)}...`);
+    res.json({ success: true, message: 'HWID unbanned' });
+});
+
+// List all bans
+app.post('/auth/admin/list-bans', validateAppSecret, (req, res) => {
+    res.json({
+        success: true,
+        banned_ips: Array.from(bannedIPs),
+        banned_hwids: Array.from(bannedHWIDs)
+    });
+});
+
+// Clear all bans
+app.post('/auth/admin/clear-all-bans', validateAppSecret, (req, res) => {
+    const ipCount = bannedIPs.size;
+    const hwidCount = bannedHWIDs.size;
+    
+    bannedIPs.clear();
+    bannedHWIDs.clear();
+    rateLimitStore.clear();
+    failedAttempts.clear();
+    
+    console.log(`🧹 Cleared ${ipCount} IP bans and ${hwidCount} HWID bans`);
+    res.json({ 
+        success: true, 
+        message: 'All bans cleared',
+        cleared_ips: ipCount,
+        cleared_hwids: hwidCount
+    });
+});
+
+// Whitelist key
+const whitelistedKeys = new Set();
+app.post('/auth/admin/whitelist-key', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    if (!license_key) return res.status(400).json({ success: false, message: 'Key required' });
+    
+    whitelistedKeys.add(license_key);
+    console.log(`⭐ Key whitelisted: ${license_key}`);
+    res.json({ success: true, message: 'Key whitelisted' });
+});
+
+// Security stats
+app.post('/auth/admin/security-stats', validateAppSecret, (req, res) => {
+    res.json({
+        success: true,
+        banned_ips: bannedIPs.size,
+        banned_hwids: bannedHWIDs.size,
+        whitelisted_keys: whitelistedKeys.size,
+        active_sessions: activeSessions.size,
+        rate_limited: rateLimitStore.size,
+        failed_attempts_tracked: failedAttempts.size
+    });
+});
+
+// Rotate owner key
+app.post('/auth/admin/rotate-owner-key', validateAppSecret, (req, res) => {
+    ownerKeyData = generateOwnerKey();
+    console.log(`🔄 Owner key rotated manually`);
+    res.json({
+        success: true,
+        owner_key: ownerKeyData.key,
+        generated_at: ownerKeyData.generatedAt,
+        next_rotation: ownerKeyData.nextRotation
+    });
+});
+
+// Clear logs
+app.post('/auth/admin/clear-logs', validateAppSecret, (req, res) => {
+    const count = crackAttemptLogs.length;
+    crackAttemptLogs.length = 0;
+    console.log(`🧹 Cleared ${count} crack attempt logs`);
+    res.json({ success: true, cleared: count });
+});
+
+// Revoke all sessions
+app.post('/auth/admin/revoke-all-sessions', validateAppSecret, (req, res) => {
+    const count = activeSessions.size;
+    activeSessions.clear();
+    console.log(`🚪 Revoked ${count} active sessions`);
+    res.json({ success: true, count });
+});
+
+// Reset rate limits
+app.post('/auth/admin/reset-rate-limits', validateAppSecret, (req, res) => {
+    const rlCount = rateLimitStore.size;
+    const faCount = failedAttempts.size;
+    
+    rateLimitStore.clear();
+    failedAttempts.clear();
+    
+    console.log(`🔄 Reset ${rlCount} rate limits and ${faCount} failed attempt records`);
+    res.json({ 
+        success: true, 
+        message: 'Rate limits cleared',
+        rate_limits_cleared: rlCount,
+        failed_attempts_cleared: faCount
+    });
+});
+
+// Search user
+app.post('/auth/admin/search-user', validateAppSecret, (req, res) => {
+    const { query } = req.body;
+    if (!query) return res.status(400).json({ success: false, message: 'Query required' });
+    
+    // Search in license keys, HWIDs, user data
+    let found = null;
+    
+    // Check if it's a license key
+    if (validLicenseKeys.has(query)) {
+        const session = Array.from(activeSessions.values()).find(s => s.license === query);
+        found = {
+            license_key: query,
+            hwid: session?.hwid || null,
+            ip: session?.ip || null,
+            status: 'Active',
+            last_login: session?.lastActivity || null
+        };
+    }
+    
+    // Search in sessions by HWID or IP
+    if (!found) {
+        for (const [token, session] of activeSessions) {
+            if (session.hwid === query || session.ip === query || session.license === query) {
+                found = {
+                    license_key: session.license,
+                    hwid: session.hwid,
+                    ip: session.ip,
+                    status: 'Active',
+                    last_login: session.lastActivity
+                };
+                break;
+            }
+        }
+    }
+    
+    if (found) {
+        res.json({ success: true, user: found });
+    } else {
+        res.json({ success: false, message: 'User not found' });
+    }
+});
+
+// List all keys
+app.post('/auth/admin/list-keys', validateAppSecret, (req, res) => {
+    const keys = Array.from(validLicenseKeys).map(key => {
+        const session = Array.from(activeSessions.values()).find(s => s.license === key);
+        return {
+            key,
+            hwid: session?.hwid || null,
+            last_used: session?.lastActivity || null
+        };
+    });
+    
+    res.json({ success: true, keys, count: keys.length });
+});
+
+// Revoke key
+app.post('/auth/admin/revoke-key', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    if (!license_key) return res.status(400).json({ success: false, message: 'Key required' });
+    
+    const existed = validLicenseKeys.delete(license_key);
+    
+    // Also remove from sessions
+    for (const [token, session] of activeSessions) {
+        if (session.license === license_key) {
+            activeSessions.delete(token);
+        }
+    }
+    
+    if (existed) {
+        console.log(`❌ Key revoked: ${license_key}`);
+        res.json({ success: true, message: 'Key revoked' });
+    } else {
+        res.json({ success: false, message: 'Key not found' });
+    }
+});
+
+// Reset key HWID
+const keyHWIDLocks = new Map();
+app.post('/auth/admin/reset-hwid', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    if (!license_key) return res.status(400).json({ success: false, message: 'Key required' });
+    
+    keyHWIDLocks.delete(license_key);
+    console.log(`🔄 HWID reset for key: ${license_key}`);
+    res.json({ success: true, message: 'HWID reset' });
+});
+
+// Extend key
+const keyExpirations = new Map();
+app.post('/auth/admin/extend-key', validateAppSecret, (req, res) => {
+    const { license_key, days } = req.body;
+    if (!license_key) return res.status(400).json({ success: false, message: 'Key required' });
+    
+    const currentExpiry = keyExpirations.get(license_key) || Date.now();
+    const newExpiry = currentExpiry + (days * 24 * 60 * 60 * 1000);
+    keyExpirations.set(license_key, newExpiry);
+    
+    console.log(`📅 Extended ${license_key} by ${days} days`);
+    res.json({ 
+        success: true, 
+        message: `Extended by ${days} days`,
+        new_expiry: new Date(newExpiry).toISOString()
+    });
+});
+
+// Send message to user
+const pendingMessages = new Map();
+app.post('/auth/admin/send-message', validateAppSecret, (req, res) => {
+    const { license_key, message } = req.body;
+    if (!license_key || !message) return res.status(400).json({ success: false, message: 'Key and message required' });
+    
+    if (!pendingMessages.has(license_key)) {
+        pendingMessages.set(license_key, []);
+    }
+    pendingMessages.get(license_key).push({
+        message,
+        timestamp: Date.now()
+    });
+    
+    console.log(`📨 Message queued for ${license_key}: ${message.substring(0, 50)}...`);
+    res.json({ success: true, message: 'Message queued' });
+});
+
+// Get pending messages for a user (called by client)
+app.post('/auth/get-messages', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    if (!license_key) return res.status(400).json({ success: false, message: 'Key required' });
+    
+    const messages = pendingMessages.get(license_key) || [];
+    pendingMessages.delete(license_key); // Clear after retrieval
+    
+    res.json({ success: true, messages });
+});
+
+// Ban user (by identifier - key, HWID, or IP)
+app.post('/auth/admin/ban-user', validateAppSecret, (req, res) => {
+    const { identifier } = req.body;
+    if (!identifier) return res.status(400).json({ success: false, message: 'Identifier required' });
+    
+    // Determine type and ban appropriately
+    if (identifier.includes('.')) {
+        // Looks like IP
+        bannedIPs.add(identifier);
+        console.log(`🚫 Banned IP: ${identifier}`);
+    } else if (identifier.startsWith('LW-') || identifier.includes('-')) {
+        // Looks like license key - find associated HWID
+        for (const [token, session] of activeSessions) {
+            if (session.license === identifier) {
+                if (session.hwid) bannedHWIDs.add(session.hwid);
+                if (session.ip) bannedIPs.add(session.ip);
+                activeSessions.delete(token);
+            }
+        }
+        validLicenseKeys.delete(identifier);
+        console.log(`🚫 Banned license: ${identifier}`);
+    } else {
+        // Assume HWID
+        bannedHWIDs.add(identifier);
+        console.log(`🚫 Banned HWID: ${identifier.substring(0, 20)}...`);
+    }
+    
+    res.json({ success: true, message: 'User banned' });
+});
+
+// Get app info (stats)
+app.post('/auth/admin/get-app-info', validateAppSecret, (req, res) => {
+    res.json({
+        success: true,
+        total_users: validLicenseKeys.size,
+        total_keys: validLicenseKeys.size,
+        online_users: activeSessions.size,
+        loader_enabled: !loaderDisabled,
+        auth_enabled: authEnabled,
+        lockdown: lockdownMode,
+        maintenance: maintenanceMode,
+        server_uptime: Date.now() - serverStartTime
+    });
+});
+
+// Get crack attempts
+app.post('/auth/admin/get-crack-attempts', validateAppSecret, (req, res) => {
+    res.json({
+        success: true,
+        attempts: crackAttemptLogs.slice(-100),
+        total: crackAttemptLogs.length
+    });
+});
+
+// Trigger BSOD
+app.post('/auth/admin/trigger-bsod', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    if (!license_key) return res.status(400).json({ success: false, message: 'Key required' });
+    
+    // Find session and set BSOD flag
+    for (const [token, session] of activeSessions) {
+        if (session.license === license_key) {
+            session.triggerBSOD = true;
+            console.log(`💀 BSOD triggered for: ${license_key}`);
+            res.json({ success: true, message: 'BSOD will trigger on next heartbeat' });
+            return;
+        }
+    }
+    
+    res.json({ success: false, message: 'User not currently online' });
+});
+
+// Generate single key
+app.post('/auth/admin/generate-key', validateAppSecret, (req, res) => {
+    const key = 'LW-' + crypto.randomBytes(4).toString('hex').toUpperCase() + 
+                '-' + crypto.randomBytes(4).toString('hex').toUpperCase() +
+                '-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+    validLicenseKeys.add(key);
+    console.log(`🔑 Generated key: ${key}`);
+    res.json({ success: true, key });
+});
+
+// ========================================
 // HWID VERIFICATION ENDPOINT
 // For owner panel access
 // ========================================
