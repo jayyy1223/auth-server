@@ -484,7 +484,7 @@ app.use('/auth', (req, res, next) => {
         return res.status(503).json({
             success: false,
             error: 'SERVER_DISABLED',
-            message: 'Server is currently disabled. Please contact administrator.'
+            message: 'Disabled by a LiteWare administrator'
         });
     }
     next();
@@ -1509,6 +1509,16 @@ app.post('/auth/check-loader', (req, res) => {
         });
     }
     
+    // Check if server is disabled (takes priority over loader status)
+    if (serverDisabled) {
+        return res.json({
+            success: false,
+            disabled: true,
+            message: 'Disabled by a LiteWare administrator',
+            closeAfter: 5000 // Close after 5 seconds
+        });
+    }
+    
     // Check if loader is disabled
     if (!loaderStatus.enabled) {
         res.json({
@@ -1575,7 +1585,9 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
             return res.json({
                 success: false,
                 error: 'SERVER_DISABLED',
-                message: 'Server is currently disabled. Please contact administrator.'
+                message: 'Disabled by a LiteWare administrator',
+                loader_disabled: true,
+                closeAfter: 5000
             });
         }
         
