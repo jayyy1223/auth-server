@@ -1039,6 +1039,148 @@ app.post('/auth/verify-owner-key', (req, res) => {
     }
 });
 
+// Maintenance mode flag
+let maintenanceMode = false;
+
+// Admin endpoints - protected by HWID (only authorized HWIDs can access)
+app.post('/auth/admin/shutdown', (req, res) => {
+    const { hwid, gpu_hash, app_secret } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // Verify HWID authorization
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === (clientHwid || '').toLowerCase()
+    );
+    
+    if (!isAuthorized && app_secret !== APP_SECRET) {
+        return res.status(403).json({
+            success: false,
+            error: 'UNAUTHORIZED',
+            message: 'Access denied'
+        });
+    }
+    
+    console.log('🛑 Shutdown command received from authorized source');
+    
+    res.json({
+        success: true,
+        message: 'Server will shutdown in 3 seconds'
+    });
+    
+    // Shutdown after response is sent
+    setTimeout(() => {
+        console.log('🛑 Shutting down server...');
+        process.exit(0);
+    }, 3000);
+});
+
+app.post('/auth/admin/maintenance', (req, res) => {
+    const { hwid, gpu_hash, enabled, app_secret } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // Verify HWID authorization
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === (clientHwid || '').toLowerCase()
+    );
+    
+    if (!isAuthorized && app_secret !== APP_SECRET) {
+        return res.status(403).json({
+            success: false,
+            error: 'UNAUTHORIZED',
+            message: 'Access denied'
+        });
+    }
+    
+    maintenanceMode = enabled === true || enabled === 'true';
+    console.log(`🔧 Maintenance mode ${maintenanceMode ? 'ENABLED' : 'DISABLED'}`);
+    
+    res.json({
+        success: true,
+        maintenance_mode: maintenanceMode,
+        message: `Maintenance mode ${maintenanceMode ? 'enabled' : 'disabled'}`
+    });
+});
+
+app.post('/auth/admin/clear-logs', (req, res) => {
+    const { hwid, gpu_hash, app_secret } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // Verify HWID authorization
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === (clientHwid || '').toLowerCase()
+    );
+    
+    if (!isAuthorized && app_secret !== APP_SECRET) {
+        return res.status(403).json({
+            success: false,
+            error: 'UNAUTHORIZED',
+            message: 'Access denied'
+        });
+    }
+    
+    // Clear crack logs
+    try {
+        if (global.crackLogs) {
+            global.crackLogs.clear();
+        }
+        console.log('🗑️ All crack logs cleared by admin');
+        
+        res.json({
+            success: true,
+            message: 'All logs cleared successfully'
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: 'CLEAR_FAILED',
+            message: error.message
+        });
+    }
+});
+
+app.post('/auth/admin/reset-limits', (req, res) => {
+    const { hwid, gpu_hash, app_secret } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // Verify HWID authorization
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === (clientHwid || '').toLowerCase()
+    );
+    
+    if (!isAuthorized && app_secret !== APP_SECRET) {
+        return res.status(403).json({
+            success: false,
+            error: 'UNAUTHORIZED',
+            message: 'Access denied'
+        });
+    }
+    
+    // Reset rate limits
+    try {
+        if (global.rateLimitMap) {
+            global.rateLimitMap.clear();
+        }
+        if (global.bannedIPs) {
+            global.bannedIPs.clear();
+        }
+        if (global.bannedHWIDs) {
+            global.bannedHWIDs.clear();
+        }
+        console.log('🔄 Rate limits reset by admin');
+        
+        res.json({
+            success: true,
+            message: 'Rate limits reset successfully'
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: 'RESET_FAILED',
+            message: error.message
+        });
+    }
+});
+
 // Verify owner session
 function validateOwnerSession(req, res, next) {
     const sessionToken = req.body.session_token || req.headers['x-owner-session'] || req.cookies.owner_session;
@@ -1146,6 +1288,99 @@ function saveLoaderStatus() {
 // Load status on startup
 loadLoaderStatus();
 
+
+
+// ========================================
+// WEBSITE LOCK SYSTEM
+// ========================================
+
+let websiteLockStatus = {
+    locked: false,
+    message: '',
+    lockedAt: null,
+    lastUpdated: new Date().toISOString()
+};
+
+// Website lock status file for persistence
+const WEBSITE_LOCK_FILE = path.join(__dirname, 'website_lock.json');
+
+// Load website lock status from file on startup
+function loadWebsiteLockStatus() {
+    try {
+        if (fs.existsSync(WEBSITE_LOCK_FILE)) {
+            const data = fs.readFileSync(WEBSITE_LOCK_FILE, 'utf8');
+            const parsed = JSON.parse(data);
+            websiteLockStatus = { ...websiteLockStatus, ...parsed };
+            console.log('✅ Loaded website lock status from file:', websiteLockStatus.locked ? 'LOCKED' : 'UNLOCKED');
+        }
+    } catch (error) {
+        console.error('Error loading website lock status:', error.message);
+    }
+}
+
+// Save website lock status to file
+function saveWebsiteLockStatus() {
+    try {
+        fs.writeFileSync(WEBSITE_LOCK_FILE, JSON.stringify(websiteLockStatus, null, 2), 'utf8');
+    } catch (error) {
+        console.error('Error saving website lock status:', error.message);
+    }
+}
+
+// Load status on startup
+loadWebsiteLockStatus();
+
+// Get website lock status endpoint (for dashboard checking)
+app.post('/auth/website-lock-status', (req, res) => {
+    res.json({
+        success: true,
+        locked: websiteLockStatus.locked,
+        message: websiteLockStatus.message,
+        lockedAt: websiteLockStatus.lockedAt,
+        lastUpdated: websiteLockStatus.lastUpdated
+    });
+});
+
+// Set website lock status endpoint (lock/unlock)
+app.post('/auth/set-website-lock-status', (req, res) => {
+    const { hwid, gpu_hash, app_secret, locked, message } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // Verify HWID authorization or app secret
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === (clientHwid || '').toLowerCase()
+    );
+    
+    if (!isAuthorized && app_secret !== APP_SECRET) {
+        return res.status(403).json({
+            success: false,
+            error: 'UNAUTHORIZED',
+            message: 'Access denied. Owner authorization required.'
+        });
+    }
+    
+    websiteLockStatus.locked = locked === true || locked === 'true';
+    websiteLockStatus.message = message || (locked ? 'This website has been locked by LiteWare administrators' : '');
+    websiteLockStatus.lastUpdated = new Date().toISOString();
+    
+    if (locked) {
+        websiteLockStatus.lockedAt = new Date().toISOString();
+    } else {
+        websiteLockStatus.lockedAt = null;
+    }
+    
+    saveWebsiteLockStatus();
+    
+    console.log(`🔒 Website lock status changed to: ${websiteLockStatus.locked ? 'LOCKED' : 'UNLOCKED'}`);
+    
+    res.json({
+        success: true,
+        message: `Website ${websiteLockStatus.locked ? 'locked' : 'unlocked'} successfully`,
+        status: websiteLockStatus
+    });
+});
+
+// ========================================
 // Get loader status endpoint (for dashboard polling)
 app.post('/auth/loader-status', validateAppSecret, (req, res) => {
     res.json({
@@ -1257,6 +1492,16 @@ app.get('/auth/loader-status', (req, res) => {
 // License validation endpoint
 app.post('/auth/license', validateAppSecret, (req, res) => {
     try {
+        // Check maintenance mode
+        if (maintenanceMode) {
+            console.log('⚠️ License request rejected - Maintenance mode enabled');
+            return res.json({
+                success: false,
+                error: 'MAINTENANCE_MODE',
+                message: 'Server is currently under maintenance. Please try again later.'
+            });
+        }
+        
         // Check if loader is disabled first
         if (!loaderStatus.enabled) {
             console.log('⚠️ License request rejected - Loader is disabled');
