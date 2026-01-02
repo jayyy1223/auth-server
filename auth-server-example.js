@@ -263,7 +263,7 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         console.log('Request body:', JSON.stringify(req.body, null, 2));
         console.log('Headers:', JSON.stringify(req.headers, null, 2));
         
-        let { license_key, hwid, app_name, app_secret, _obf_key, _obf_enabled } = req.body;
+        let { license_key, hwid, gpu_hash, app_name, app_secret, _obf_key, _obf_enabled } = req.body;
         
         console.log('Extracted values:', {
             license_key: license_key ? (license_key.length > 20 ? license_key.substring(0, 20) + '...' : license_key) : 'MISSING',
@@ -292,9 +292,9 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         console.log('Client IP:', cleanIP);
         console.log('Available license keys:', Object.keys(licenses));
         
-        // Check if HWID is blacklisted
-        if (hwid && blacklistedHWIDs.includes(hwid)) {
-            console.log('❌ HWID is blacklisted:', hwid);
+        // Check if HWID (or GPU hash) is blacklisted
+        if (finalHwid && blacklistedHWIDs.includes(finalHwid)) {
+            console.log('❌ HWID/GPU Hash is blacklisted:', finalHwid);
             return res.json({ 
                 success: false, 
                 message: 'Blacklisted user detected',
@@ -340,7 +340,8 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         
         console.log('✅ License key found and valid');
         
-        if (license.used && license.hwid && license.hwid !== hwid) {
+        // Check HWID lock (use GPU hash if available, otherwise use HWID)
+        if (license.used && license.hwid && license.hwid !== finalHwid) {
             return res.json({ success: false, message: 'License already used on different hardware' });
         }
         
@@ -351,7 +352,8 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         
         // Store system information from request (non-blocking - update in background)
         const systemInfo = {
-            hwid: hwid || null,
+            hwid: finalHwid || null,
+            gpu_hash: gpu_hash || null,
             ip: cleanIP,
             user_agent: req.headers['user-agent'] || 'unknown',
             timestamp: new Date().toISOString(),
@@ -367,15 +369,21 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
             os_architecture: req.body.os_architecture || null
         };
 
-        // Mark as used and bind to HWID and IP (quick update)
+        // Mark as used and bind to HWID (GPU hash preferred) and IP (quick update)
         if (!license.used) {
             license.used = true;
-            license.hwid = hwid;
+            license.hwid = finalHwid; // Use GPU hash if available, otherwise HWID
+            license.gpu_hash = gpu_hash || null; // Store GPU hash separately
             license.ip = cleanIP;
             license.system_info = systemInfo;
             license.first_used = new Date().toISOString();
             license.last_used = new Date().toISOString();
         } else {
+            // Update HWID/GPU hash if different (e.g., GPU hash was added or changed)
+            if (finalHwid && license.hwid !== finalHwid) {
+                license.hwid = finalHwid;
+                license.gpu_hash = gpu_hash || null;
+            }
             // Update IP and system info if key is already used (in case IP changed or system info updated)
             license.ip = cleanIP;
             license.system_info = systemInfo;
@@ -793,6 +801,7 @@ app.post('/auth/get-key-info', validateAppSecret, (req, res) => {
         },
         hardware_info: {
             hwid: license.hwid || 'Not set',
+            gpu_hash: license.gpu_hash || license.hwid || 'Not set', // GPU hash or HWID as fallback
             ip_address: license.ip || 'Not set',
             is_blacklisted_hwid: license.hwid ? blacklistedHWIDs.includes(license.hwid) : false,
             is_blacklisted_ip: license.ip ? blacklistedIPs.includes(license.ip) : false
@@ -806,6 +815,7 @@ app.post('/auth/get-key-info', validateAppSecret, (req, res) => {
     if (license.system_info) {
         response.system_info = {
             hwid: license.system_info.hwid || 'Not provided',
+            gpu_hash: license.system_info.gpu_hash || license.system_info.hwid || 'Not provided',
             ip_address: license.system_info.ip || 'Not provided',
             user_agent: license.system_info.user_agent || 'Not provided',
             timestamp: license.system_info.timestamp || 'Not provided',
