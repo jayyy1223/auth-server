@@ -830,6 +830,177 @@ function savePersistentBSOD() {
 // Load on startup
 loadPersistentBSOD();
 
+// ========================================
+// OWNER KEY SYSTEM (24-HOUR AUTO-ROTATION)
+// ========================================
+const OWNER_KEY_FILE = path.join(__dirname, 'owner_key.json');
+
+let ownerKeyData = {
+    key: '',
+    generatedAt: null,
+    nextRotation: null
+};
+
+// Generate a secure random owner key
+function generateOwnerKey() {
+    return crypto.randomBytes(32).toString('hex');
+}
+
+// Load owner key from file
+function loadOwnerKey() {
+    try {
+        if (fs.existsSync(OWNER_KEY_FILE)) {
+            const data = fs.readFileSync(OWNER_KEY_FILE, 'utf8');
+            ownerKeyData = JSON.parse(data);
+            
+            // Check if key needs rotation (24 hours)
+            const now = Date.now();
+            if (ownerKeyData.nextRotation && now >= ownerKeyData.nextRotation) {
+                console.log('🔑 Owner key expired - generating new key');
+                rotateOwnerKey();
+            } else if (!ownerKeyData.key) {
+                rotateOwnerKey();
+            } else {
+                console.log(`🔑 Owner key loaded. Next rotation: ${new Date(ownerKeyData.nextRotation).toISOString()}`);
+            }
+        } else {
+            // First time - generate initial key
+            rotateOwnerKey();
+        }
+    } catch (error) {
+        console.error('Error loading owner key:', error);
+        rotateOwnerKey();
+    }
+}
+
+// Rotate owner key (new key every 24 hours)
+function rotateOwnerKey() {
+    ownerKeyData.key = generateOwnerKey();
+    ownerKeyData.generatedAt = Date.now();
+    ownerKeyData.nextRotation = ownerKeyData.generatedAt + (24 * 60 * 60 * 1000); // 24 hours
+    
+    try {
+        fs.writeFileSync(OWNER_KEY_FILE, JSON.stringify(ownerKeyData, null, 2));
+        console.log(`🔑 NEW OWNER KEY GENERATED: ${ownerKeyData.key.substring(0, 16)}...`);
+        console.log(`   Next rotation: ${new Date(ownerKeyData.nextRotation).toISOString()}`);
+    } catch (error) {
+        console.error('Error saving owner key:', error);
+    }
+}
+
+// Check owner key
+function validateOwnerKey(key) {
+    if (!ownerKeyData.key) return false;
+    return crypto.timingSafeEqual(
+        Buffer.from(key || '', 'hex'),
+        Buffer.from(ownerKeyData.key, 'hex')
+    );
+}
+
+// Load owner key on startup
+loadOwnerKey();
+
+// Auto-rotate key every 24 hours
+setInterval(() => {
+    const now = Date.now();
+    if (ownerKeyData.nextRotation && now >= ownerKeyData.nextRotation) {
+        rotateOwnerKey();
+    }
+}, 60 * 60 * 1000); // Check every hour
+
+// Owner key validation middleware
+function validateOwnerKeyMiddleware(req, res, next) {
+    const ownerKey = req.body.owner_key || req.headers['x-owner-key'] || req.query.owner_key;
+    
+    if (!ownerKey) {
+        return res.status(401).json({
+            success: false,
+            error: 'OWNER_KEY_REQUIRED',
+            message: 'Owner key is required'
+        });
+    }
+    
+    if (!validateOwnerKey(ownerKey)) {
+        // Log failed attempts
+        const ip = req.ip || req.connection.remoteAddress;
+        console.log(`🚫 Invalid owner key attempt from ${ip}`);
+        
+        return res.status(403).json({
+            success: false,
+            error: 'INVALID_OWNER_KEY',
+            message: 'Invalid owner key'
+        });
+    }
+    
+    next();
+}
+
+// Get current owner key (protected endpoint)
+app.post('/auth/get-owner-key', validateAppSecret, (req, res) => {
+    res.json({
+        success: true,
+        owner_key: ownerKeyData.key,
+        generated_at: ownerKeyData.generatedAt,
+        next_rotation: ownerKeyData.nextRotation,
+        time_until_rotation: ownerKeyData.nextRotation ? ownerKeyData.nextRotation - Date.now() : null
+    });
+});
+
+// Verify owner key endpoint (for frontend)
+app.post('/auth/verify-owner-key', (req, res) => {
+    const { owner_key } = req.body;
+    
+    if (validateOwnerKey(owner_key)) {
+        // Generate session token for owner
+        const sessionToken = crypto.randomBytes(64).toString('hex');
+        
+        // Store session (in production use Redis)
+        if (!global.ownerSessions) global.ownerSessions = new Map();
+        global.ownerSessions.set(sessionToken, {
+            createdAt: Date.now(),
+            expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 hour session
+        });
+        
+        res.json({
+            success: true,
+            session_token: sessionToken,
+            expires_at: Date.now() + (24 * 60 * 60 * 1000)
+        });
+    } else {
+        res.status(403).json({
+            success: false,
+            error: 'INVALID_OWNER_KEY',
+            message: 'Invalid owner key'
+        });
+    }
+});
+
+// Verify owner session
+function validateOwnerSession(req, res, next) {
+    const sessionToken = req.body.session_token || req.headers['x-owner-session'] || req.cookies.owner_session;
+    
+    if (!sessionToken || !global.ownerSessions || !global.ownerSessions.has(sessionToken)) {
+        return res.status(401).json({
+            success: false,
+            error: 'SESSION_INVALID',
+            message: 'Owner session expired or invalid'
+        });
+    }
+    
+    const session = global.ownerSessions.get(sessionToken);
+    if (Date.now() > session.expiresAt) {
+        global.ownerSessions.delete(sessionToken);
+        return res.status(401).json({
+            success: false,
+            error: 'SESSION_EXPIRED',
+            message: 'Owner session expired'
+        });
+    }
+    
+    req.ownerSession = session;
+    next();
+}
+
 // Application secret (keep this secure!)
 // IMPORTANT: Change this to a secure random string!
 const APP_SECRET = 'ABCJDWQ91D9219D21JKWDDKQAD912Q';
