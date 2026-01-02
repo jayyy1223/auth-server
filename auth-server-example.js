@@ -21,6 +21,10 @@ const bannedHWIDs = new Set();
 const activeSessions = new Map();
 const requestSignatures = new Set(); // Prevent replay attacks
 
+// Server state flags
+let serverDisabled = false; // Server disable mode (blocks requests but keeps server running)
+let maintenanceMode = false; // Maintenance mode flag
+
 // Security constants
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
 const MAX_REQUESTS_PER_WINDOW = 30;
@@ -469,6 +473,20 @@ app.use('/auth', (req, res, next) => {
         // }
     }
     
+    next();
+});
+
+// Server disable check middleware (must be before signature verification)
+app.use('/auth', (req, res, next) => {
+    // Allow enable-server and server-status endpoints even if server is disabled (to re-enable it)
+    if (serverDisabled && req.path !== '/admin/enable-server' && req.path !== '/admin/server-status') {
+        console.log('🚫 Request rejected - Server is disabled');
+        return res.status(503).json({
+            success: false,
+            error: 'SERVER_DISABLED',
+            message: 'Server is currently disabled. Please contact administrator.'
+        });
+    }
     next();
 });
 
@@ -1039,10 +1057,69 @@ app.post('/auth/verify-owner-key', (req, res) => {
     }
 });
 
-// Maintenance mode flag
-let maintenanceMode = false;
-
 // Admin endpoints - protected by HWID (only authorized HWIDs can access)
+app.post('/auth/admin/disable-server', (req, res) => {
+    const { hwid, gpu_hash, app_secret } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // Verify HWID authorization
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === (clientHwid || '').toLowerCase()
+    );
+    
+    if (!isAuthorized && app_secret !== APP_SECRET) {
+        return res.status(403).json({
+            success: false,
+            error: 'UNAUTHORIZED',
+            message: 'Access denied'
+        });
+    }
+    
+    serverDisabled = true;
+    console.log('🚫 Server disabled - all requests will be blocked');
+    
+    res.json({
+        success: true,
+        message: 'Server disabled successfully. All requests are now blocked.',
+        disabled: true
+    });
+});
+
+app.post('/auth/admin/enable-server', (req, res) => {
+    const { hwid, gpu_hash, app_secret } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // Verify HWID authorization
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === (clientHwid || '').toLowerCase()
+    );
+    
+    if (!isAuthorized && app_secret !== APP_SECRET) {
+        return res.status(403).json({
+            success: false,
+            error: 'UNAUTHORIZED',
+            message: 'Access denied'
+        });
+    }
+    
+    serverDisabled = false;
+    console.log('✅ Server re-enabled - all requests are now allowed');
+    
+    res.json({
+        success: true,
+        message: 'Server re-enabled successfully. All services are operational.',
+        disabled: false
+    });
+});
+
+app.post('/auth/admin/server-status', (req, res) => {
+    res.json({
+        success: true,
+        disabled: serverDisabled,
+        message: serverDisabled ? 'Server is disabled' : 'Server is operational'
+    });
+});
+
 app.post('/auth/admin/shutdown', (req, res) => {
     const { hwid, gpu_hash, app_secret } = req.body;
     const clientHwid = gpu_hash || hwid;
@@ -1492,6 +1569,16 @@ app.get('/auth/loader-status', (req, res) => {
 // License validation endpoint
 app.post('/auth/license', validateAppSecret, (req, res) => {
     try {
+        // Check if server is disabled
+        if (serverDisabled) {
+            console.log('🚫 License request rejected - Server is disabled');
+            return res.json({
+                success: false,
+                error: 'SERVER_DISABLED',
+                message: 'Server is currently disabled. Please contact administrator.'
+            });
+        }
+        
         // Check maintenance mode
         if (maintenanceMode) {
             console.log('⚠️ License request rejected - Maintenance mode enabled');
