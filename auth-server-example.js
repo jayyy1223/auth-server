@@ -27,6 +27,268 @@ app.use((req, res, next) => {
 });
 
 // ========================================
+// ANTI-CRACKER DETECTION SYSTEM
+// ========================================
+
+// Known cracking tool signatures and patterns
+const CRACKER_SIGNATURES = {
+    userAgents: [
+        /postman/i, /insomnia/i, /curl/i, /wget/i, /httpie/i,
+        /python-requests/i, /axios/i, /node-fetch/i, /got/i,
+        /charles/i, /fiddler/i, /burp/i, /mitmproxy/i, /proxyman/i,
+        /wireshark/i, /telerik/i, /owasp/i, /zap/i, /nikto/i,
+        /sqlmap/i, /nmap/i, /masscan/i, /hydra/i, /medusa/i
+    ],
+    suspiciousHeaders: [
+        'x-forwarded-for', 'x-real-ip', 'x-originating-ip',
+        'x-remote-ip', 'x-client-ip', 'via', 'forwarded'
+    ],
+    vpnProviders: [
+        'nordvpn', 'expressvpn', 'surfshark', 'cyberghost', 'pia',
+        'mullvad', 'protonvpn', 'windscribe', 'tunnelbear', 'hotspot'
+    ]
+};
+
+// Behavioral analysis storage
+const behaviorAnalysis = new Map();
+const suspiciousPatterns = new Map();
+const honeypotTriggers = new Set();
+const crackerFingerprints = new Set();
+
+// Advanced detection functions
+function detectCrackingAttempt(req) {
+    const indicators = [];
+    const ip = req.ip || req.connection.remoteAddress;
+    const ua = req.headers['user-agent'] || '';
+    
+    // 1. Check for cracking tool user agents
+    for (const pattern of CRACKER_SIGNATURES.userAgents) {
+        if (pattern.test(ua)) {
+            indicators.push({ type: 'CRACKING_TOOL', detail: pattern.toString() });
+        }
+    }
+    
+    // 2. Check for missing or suspicious headers
+    if (!ua || ua.length < 20) {
+        indicators.push({ type: 'MISSING_UA', detail: 'No or short user agent' });
+    }
+    
+    // 3. Check for proxy/VPN headers
+    for (const header of CRACKER_SIGNATURES.suspiciousHeaders) {
+        if (req.headers[header]) {
+            indicators.push({ type: 'PROXY_DETECTED', detail: header });
+        }
+    }
+    
+    // 4. Check request timing anomalies
+    const behavior = behaviorAnalysis.get(ip) || { requests: [], lastTime: 0 };
+    const now = Date.now();
+    const timeDiff = now - behavior.lastTime;
+    
+    // Bot detection: requests too fast or too regular
+    if (timeDiff > 0 && timeDiff < 50) {
+        indicators.push({ type: 'BOT_SPEED', detail: `${timeDiff}ms between requests` });
+    }
+    
+    // 5. Check for identical request patterns (replay/automation)
+    const requestHash = crypto.createHash('md5')
+        .update(JSON.stringify(req.body) + req.path)
+        .digest('hex');
+    
+    if (behavior.requests.includes(requestHash)) {
+        indicators.push({ type: 'REPLAY_DETECTED', detail: 'Duplicate request pattern' });
+    }
+    
+    // Update behavior tracking
+    behavior.requests.push(requestHash);
+    if (behavior.requests.length > 20) behavior.requests.shift();
+    behavior.lastTime = now;
+    behaviorAnalysis.set(ip, behavior);
+    
+    // 6. Check for honeypot triggers
+    if (honeypotTriggers.has(ip)) {
+        indicators.push({ type: 'HONEYPOT_TRIGGERED', detail: 'Previously hit honeypot' });
+    }
+    
+    // 7. Check fingerprint blacklist
+    const fingerprint = generateClientFingerprint(req);
+    if (crackerFingerprints.has(fingerprint)) {
+        indicators.push({ type: 'KNOWN_CRACKER', detail: 'Fingerprint blacklisted' });
+    }
+    
+    return indicators;
+}
+
+function generateClientFingerprint(req) {
+    const data = [
+        req.headers['user-agent'] || '',
+        req.headers['accept-language'] || '',
+        req.headers['accept-encoding'] || '',
+        req.headers['accept'] || '',
+        req.ip || req.connection.remoteAddress
+    ].join('|');
+    return crypto.createHash('sha256').update(data).digest('hex').substring(0, 32);
+}
+
+// Request integrity verification
+function verifyRequestIntegrity(req) {
+    const body = req.body;
+    
+    // Check for required security fields
+    if (!body._timestamp || !body._nonce) {
+        return { valid: false, reason: 'Missing security fields' };
+    }
+    
+    // Check timestamp freshness (5 minute window)
+    const age = Date.now() - body._timestamp;
+    if (age < -30000 || age > 300000) {
+        return { valid: false, reason: 'Request expired or future-dated' };
+    }
+    
+    // Check for replay attack
+    const requestId = `${body._nonce}-${body._timestamp}`;
+    if (requestSignatures.has(requestId)) {
+        return { valid: false, reason: 'Replay attack detected' };
+    }
+    requestSignatures.add(requestId);
+    
+    // Clean old signatures
+    setTimeout(() => requestSignatures.delete(requestId), 300000);
+    
+    // Verify HMAC if provided
+    if (body._signature) {
+        const dataToSign = JSON.stringify({ ...body, _signature: undefined }) + body._timestamp + body._nonce;
+        const expectedSig = crypto.createHmac('sha512', HMAC_SECRET)
+            .update(dataToSign)
+            .digest('hex');
+        
+        // Use timing-safe comparison
+        if (body._signature.length !== expectedSig.length) {
+            return { valid: false, reason: 'Signature length mismatch' };
+        }
+        
+        try {
+            if (!crypto.timingSafeEqual(Buffer.from(body._signature, 'hex'), Buffer.from(expectedSig, 'hex'))) {
+                return { valid: false, reason: 'Invalid signature' };
+            }
+        } catch (e) {
+            // If signature isn't valid hex, reject
+            return { valid: false, reason: 'Malformed signature' };
+        }
+    }
+    
+    return { valid: true };
+}
+
+// Advanced rate limiting with behavior analysis
+function advancedRateLimit(req, res, next) {
+    const ip = req.ip || req.connection.remoteAddress;
+    
+    // Check if IP is banned
+    if (bannedIPs.has(ip)) {
+        console.log(`🚫 Banned IP attempted access: ${ip}`);
+        return res.status(403).json({ 
+            success: false, 
+            message: 'Access denied',
+            code: 'BANNED'
+        });
+    }
+    
+    // Detect cracking attempts
+    const crackIndicators = detectCrackingAttempt(req);
+    if (crackIndicators.length >= 2) {
+        console.log(`⚠️ Cracking attempt detected from ${ip}:`, crackIndicators);
+        
+        // Track suspicious activity
+        const suspicion = suspiciousPatterns.get(ip) || { count: 0, indicators: [] };
+        suspicion.count += crackIndicators.length;
+        suspicion.indicators.push(...crackIndicators);
+        suspiciousPatterns.set(ip, suspicion);
+        
+        // Auto-ban after threshold
+        if (suspicion.count >= 10) {
+            bannedIPs.add(ip);
+            console.log(`🔨 Auto-banned cracker IP: ${ip}`);
+            
+            // Log to crack attempts
+            crackAttemptLogs.push({
+                timestamp: Date.now(),
+                ip,
+                reason: 'Auto-banned: Cracking tools detected',
+                indicators: crackIndicators
+            });
+            
+            return res.status(403).json({
+                success: false,
+                message: 'Security violation detected',
+                code: 'SECURITY_BAN'
+            });
+        }
+    }
+    
+    // Standard rate limiting
+    const now = Date.now();
+    const windowStart = now - RATE_LIMIT_WINDOW;
+    
+    let requests = rateLimitStore.get(ip) || [];
+    requests = requests.filter(time => time > windowStart);
+    
+    if (requests.length >= MAX_REQUESTS_PER_WINDOW) {
+        console.log(`⏱️ Rate limited: ${ip}`);
+        return res.status(429).json({
+            success: false,
+            message: 'Too many requests. Please wait.',
+            code: 'RATE_LIMITED',
+            retry_after: Math.ceil((requests[0] + RATE_LIMIT_WINDOW - now) / 1000)
+        });
+    }
+    
+    requests.push(now);
+    rateLimitStore.set(ip, requests);
+    
+    next();
+}
+
+// ========================================
+// HONEYPOT ENDPOINTS (Trap crackers)
+// ========================================
+
+const honeypotPaths = [
+    '/admin', '/api/admin', '/auth/debug', '/auth/test',
+    '/debug', '/test', '/config', '/env', '/settings',
+    '/.env', '/wp-admin', '/phpinfo', '/info.php',
+    '/api/v1/debug', '/api/v2/admin', '/backdoor',
+    '/shell', '/cmd', '/exec', '/eval', '/system'
+];
+
+honeypotPaths.forEach(path => {
+    app.all(path, (req, res) => {
+        const ip = req.ip || req.connection.remoteAddress;
+        console.log(`🍯 HONEYPOT TRIGGERED: ${ip} hit ${path}`);
+        
+        honeypotTriggers.add(ip);
+        crackerFingerprints.add(generateClientFingerprint(req));
+        
+        crackAttemptLogs.push({
+            timestamp: Date.now(),
+            ip,
+            reason: `Honeypot triggered: ${path}`,
+            hwid: req.body?.hwid || 'unknown'
+        });
+        
+        // Return fake success to waste their time
+        setTimeout(() => {
+            res.json({
+                success: true,
+                message: 'Debug mode enabled',
+                admin_token: crypto.randomBytes(32).toString('hex'),
+                secret_key: crypto.randomBytes(16).toString('hex')
+            });
+        }, 2000 + Math.random() * 3000);
+    });
+});
+
+// ========================================
 // ADVANCED SECURITY CONFIGURATION
 // ========================================
 
@@ -38,10 +300,12 @@ const bannedHWIDs = new Set();
 const activeSessions = new Map();
 const requestSignatures = new Set(); // Prevent replay attacks
 const serverStartTime = Date.now(); // Track server start time for uptime calculation
+const crackAttemptLogs = [];
 
 // Server state flags
 let serverDisabled = false; // Server disable mode (blocks requests but keeps server running)
 let maintenanceMode = false; // Maintenance mode flag
+let loaderDisabled = false; // Loader disable flag
 
 // Security constants
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
@@ -55,6 +319,9 @@ const SIGNATURE_EXPIRY = 60000; // 1 minute for replay protection
 // Encryption keys (rotate these regularly in production)
 const SERVER_PRIVATE_KEY = crypto.randomBytes(32);
 const HMAC_SECRET = crypto.createHash('sha256').update('LITEWARE_HMAC_2024_SECURE').digest();
+
+// Apply advanced rate limiting to all routes
+app.use(advancedRateLimit);
 
 // ========================================
 // ADVANCED ENCRYPTION FUNCTIONS
@@ -444,6 +711,64 @@ app.use((req, res, next) => {
 
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 app.use(bodyParser.json({ limit: '50mb' }));
+
+// ========================================
+// REQUEST INTEGRITY VERIFICATION MIDDLEWARE
+// ========================================
+app.use('/auth', (req, res, next) => {
+    // Skip for OPTIONS
+    if (req.method === 'OPTIONS') return next();
+    
+    // Skip for certain safe endpoints
+    const safeEndpoints = ['/auth/', '/auth/health'];
+    if (safeEndpoints.includes(req.path)) return next();
+    
+    // Verify request has required body
+    if (!req.body || typeof req.body !== 'object') {
+        console.log(`⚠️ Invalid request body from ${req.ip}`);
+        return res.status(400).json({ success: false, message: 'Invalid request' });
+    }
+    
+    // Check for automation/bot indicators
+    const ua = req.headers['user-agent'] || '';
+    if (!ua || ua.length < 10) {
+        console.log(`⚠️ Missing/short user-agent from ${req.ip}: "${ua}"`);
+        // Don't block, but flag as suspicious
+        req.suspicious = true;
+    }
+    
+    // Check for known proxy headers (potential tampering)
+    const proxyHeaders = ['x-forwarded-for', 'x-real-ip', 'via', 'forwarded'];
+    for (const header of proxyHeaders) {
+        if (req.headers[header]) {
+            req.suspicious = true;
+            req.proxyDetected = header;
+        }
+    }
+    
+    // Verify timestamp freshness (if provided)
+    if (req.body._timestamp) {
+        const age = Date.now() - req.body._timestamp;
+        if (age < -60000 || age > 600000) { // Allow 1 min clock drift, 10 min max age
+            console.log(`⚠️ Stale/future request from ${req.ip}: age=${age}ms`);
+            return res.status(400).json({ success: false, message: 'Request expired', code: 'EXPIRED' });
+        }
+    }
+    
+    // Verify nonce uniqueness (replay protection)
+    if (req.body._nonce) {
+        const nonceKey = `${req.ip}-${req.body._nonce}`;
+        if (requestSignatures.has(nonceKey)) {
+            console.log(`🔄 Replay attack detected from ${req.ip}`);
+            return res.status(400).json({ success: false, message: 'Replay detected', code: 'REPLAY' });
+        }
+        requestSignatures.add(nonceKey);
+        // Clean up after 10 minutes
+        setTimeout(() => requestSignatures.delete(nonceKey), 600000);
+    }
+    
+    next();
+});
 
 // ========================================
 // SECURITY MIDDLEWARE
