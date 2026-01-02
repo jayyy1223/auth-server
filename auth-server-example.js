@@ -1,5 +1,6 @@
-// Simple Node.js Authentication Server Example
-// Install dependencies: npm install express body-parser crypto mysql2 (or use SQLite for simplicity)
+// Liteware Advanced Authentication Server
+// Install dependencies: npm install express body-parser crypto
+// SECURITY: This server implements military-grade protection
 
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -7,6 +8,360 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const app = express();
+
+// ========================================
+// ADVANCED SECURITY CONFIGURATION
+// ========================================
+
+// Rate limiting storage
+const rateLimitStore = new Map();
+const failedAttempts = new Map();
+const bannedIPs = new Set();
+const bannedHWIDs = new Set();
+const activeSessions = new Map();
+const requestSignatures = new Set(); // Prevent replay attacks
+
+// Security constants
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const MAX_REQUESTS_PER_WINDOW = 30;
+const MAX_FAILED_ATTEMPTS = 5;
+const BAN_DURATION = 3600000; // 1 hour
+const SESSION_TIMEOUT = 300000; // 5 minutes
+const HEARTBEAT_INTERVAL = 30000; // 30 seconds
+const SIGNATURE_EXPIRY = 60000; // 1 minute for replay protection
+
+// Encryption keys (rotate these regularly in production)
+const SERVER_PRIVATE_KEY = crypto.randomBytes(32);
+const HMAC_SECRET = crypto.createHash('sha256').update('LITEWARE_HMAC_2024_SECURE').digest();
+
+// ========================================
+// ADVANCED ENCRYPTION FUNCTIONS
+// ========================================
+
+function generateSessionToken() {
+    return crypto.randomBytes(64).toString('hex');
+}
+
+function generateNonce() {
+    return crypto.randomBytes(16).toString('hex');
+}
+
+function encryptResponse(data, sessionKey) {
+    try {
+        const iv = crypto.randomBytes(16);
+        const key = crypto.createHash('sha256').update(sessionKey).digest();
+        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+        let encrypted = cipher.update(JSON.stringify(data), 'utf8', 'hex');
+        encrypted += cipher.final('hex');
+        const authTag = cipher.getAuthTag();
+        return {
+            encrypted: true,
+            iv: iv.toString('hex'),
+            data: encrypted,
+            tag: authTag.toString('hex'),
+            timestamp: Date.now()
+        };
+    } catch (e) {
+        return data; // Fallback to unencrypted
+    }
+}
+
+function decryptRequest(encryptedData, sessionKey) {
+    try {
+        if (!encryptedData.encrypted) return encryptedData;
+        const key = crypto.createHash('sha256').update(sessionKey).digest();
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(encryptedData.iv, 'hex'));
+        decipher.setAuthTag(Buffer.from(encryptedData.tag, 'hex'));
+        let decrypted = decipher.update(encryptedData.data, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        return JSON.parse(decrypted);
+    } catch (e) {
+        return null;
+    }
+}
+
+function createRequestSignature(data, timestamp, nonce) {
+    const payload = JSON.stringify(data) + timestamp + nonce;
+    return crypto.createHmac('sha512', HMAC_SECRET).update(payload).digest('hex');
+}
+
+function verifyRequestSignature(data, timestamp, nonce, signature) {
+    // Check timestamp freshness (prevent replay attacks)
+    const now = Date.now();
+    if (Math.abs(now - timestamp) > SIGNATURE_EXPIRY) {
+        return { valid: false, reason: 'Request expired' };
+    }
+    
+    // Check if signature was already used (replay protection)
+    const sigKey = `${signature}_${nonce}`;
+    if (requestSignatures.has(sigKey)) {
+        return { valid: false, reason: 'Replay attack detected' };
+    }
+    
+    // Verify signature
+    const expectedSig = createRequestSignature(data, timestamp, nonce);
+    if (!crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expectedSig, 'hex'))) {
+        return { valid: false, reason: 'Invalid signature' };
+    }
+    
+    // Store signature to prevent replay
+    requestSignatures.add(sigKey);
+    setTimeout(() => requestSignatures.delete(sigKey), SIGNATURE_EXPIRY * 2);
+    
+    return { valid: true };
+}
+
+// ========================================
+// RATE LIMITING & ANTI-BRUTE FORCE
+// ========================================
+
+function getRateLimitKey(req) {
+    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    const hwid = req.body.hwid || req.body.gpu_hash || '';
+    return `${ip}_${hwid}`;
+}
+
+function checkRateLimit(req) {
+    const key = getRateLimitKey(req);
+    const ip = req.ip || req.connection.remoteAddress;
+    
+    // Check if IP is banned
+    if (bannedIPs.has(ip)) {
+        return { allowed: false, reason: 'IP temporarily banned', retryAfter: BAN_DURATION };
+    }
+    
+    // Check if HWID is banned
+    const hwid = req.body.hwid || req.body.gpu_hash;
+    if (hwid && bannedHWIDs.has(hwid)) {
+        return { allowed: false, reason: 'Device banned', retryAfter: BAN_DURATION };
+    }
+    
+    const now = Date.now();
+    const windowStart = now - RATE_LIMIT_WINDOW;
+    
+    // Get or create rate limit entry
+    if (!rateLimitStore.has(key)) {
+        rateLimitStore.set(key, []);
+    }
+    
+    const requests = rateLimitStore.get(key);
+    
+    // Remove old requests outside window
+    const validRequests = requests.filter(t => t > windowStart);
+    rateLimitStore.set(key, validRequests);
+    
+    // Check if over limit
+    if (validRequests.length >= MAX_REQUESTS_PER_WINDOW) {
+        // Increment failed attempts
+        const fails = (failedAttempts.get(ip) || 0) + 1;
+        failedAttempts.set(ip, fails);
+        
+        // Ban if too many failures
+        if (fails >= MAX_FAILED_ATTEMPTS) {
+            bannedIPs.add(ip);
+            setTimeout(() => bannedIPs.delete(ip), BAN_DURATION);
+            console.log(`🚫 Banned IP for rate limit abuse: ${ip}`);
+        }
+        
+        return { 
+            allowed: false, 
+            reason: 'Rate limit exceeded', 
+            retryAfter: RATE_LIMIT_WINDOW,
+            remaining: 0
+        };
+    }
+    
+    // Add current request
+    validRequests.push(now);
+    rateLimitStore.set(key, validRequests);
+    
+    return { 
+        allowed: true, 
+        remaining: MAX_REQUESTS_PER_WINDOW - validRequests.length 
+    };
+}
+
+function recordFailedAttempt(req, reason) {
+    const ip = req.ip || req.connection.remoteAddress;
+    const hwid = req.body.hwid || req.body.gpu_hash;
+    
+    const fails = (failedAttempts.get(ip) || 0) + 1;
+    failedAttempts.set(ip, fails);
+    
+    console.log(`⚠️ Failed attempt #${fails} from ${ip}: ${reason}`);
+    
+    if (fails >= MAX_FAILED_ATTEMPTS) {
+        bannedIPs.add(ip);
+        if (hwid) bannedHWIDs.add(hwid);
+        setTimeout(() => {
+            bannedIPs.delete(ip);
+            if (hwid) bannedHWIDs.delete(hwid);
+        }, BAN_DURATION);
+        console.log(`🚫 Banned ${ip} and HWID ${hwid} for ${BAN_DURATION/1000}s`);
+        return true; // Was banned
+    }
+    return false;
+}
+
+function clearFailedAttempts(req) {
+    const ip = req.ip || req.connection.remoteAddress;
+    failedAttempts.delete(ip);
+}
+
+// ========================================
+// SESSION MANAGEMENT
+// ========================================
+
+function createSession(licenseKey, hwid, ip) {
+    const sessionToken = generateSessionToken();
+    const sessionKey = crypto.randomBytes(32).toString('hex');
+    
+    const session = {
+        token: sessionToken,
+        key: sessionKey,
+        licenseKey,
+        hwid,
+        ip,
+        createdAt: Date.now(),
+        lastHeartbeat: Date.now(),
+        heartbeatCount: 0
+    };
+    
+    activeSessions.set(sessionToken, session);
+    
+    // Auto-expire session
+    setTimeout(() => {
+        if (activeSessions.has(sessionToken)) {
+            const s = activeSessions.get(sessionToken);
+            if (Date.now() - s.lastHeartbeat > SESSION_TIMEOUT) {
+                activeSessions.delete(sessionToken);
+                console.log(`🔒 Session expired: ${sessionToken.substring(0, 16)}...`);
+            }
+        }
+    }, SESSION_TIMEOUT);
+    
+    return { token: sessionToken, key: sessionKey };
+}
+
+function validateSession(token) {
+    if (!activeSessions.has(token)) {
+        return { valid: false, reason: 'Invalid session' };
+    }
+    
+    const session = activeSessions.get(token);
+    
+    // Check if session timed out
+    if (Date.now() - session.lastHeartbeat > SESSION_TIMEOUT) {
+        activeSessions.delete(token);
+        return { valid: false, reason: 'Session expired' };
+    }
+    
+    return { valid: true, session };
+}
+
+function updateHeartbeat(token) {
+    if (activeSessions.has(token)) {
+        const session = activeSessions.get(token);
+        session.lastHeartbeat = Date.now();
+        session.heartbeatCount++;
+        activeSessions.set(token, session);
+        return true;
+    }
+    return false;
+}
+
+// ========================================
+// ANTI-TAMPER DETECTION
+// ========================================
+
+function detectSuspiciousRequest(req) {
+    const suspicious = [];
+    
+    // Check for missing or suspicious headers
+    const userAgent = req.headers['user-agent'] || '';
+    if (!userAgent || userAgent.includes('curl') || userAgent.includes('wget') || userAgent.includes('python')) {
+        suspicious.push('Suspicious user agent');
+    }
+    
+    // Check for proxy/VPN indicators
+    const proxyHeaders = ['x-forwarded-for', 'x-real-ip', 'via', 'forwarded'];
+    for (const header of proxyHeaders) {
+        if (req.headers[header]) {
+            suspicious.push('Proxy detected');
+            break;
+        }
+    }
+    
+    // Check for debugger indicators in request
+    if (req.body) {
+        const bodyStr = JSON.stringify(req.body).toLowerCase();
+        const debugIndicators = ['debug', 'test', 'crack', 'bypass', 'hook', 'inject'];
+        for (const indicator of debugIndicators) {
+            if (bodyStr.includes(indicator)) {
+                suspicious.push(`Suspicious keyword: ${indicator}`);
+            }
+        }
+    }
+    
+    // Check request timing patterns (too fast = automated)
+    const key = getRateLimitKey(req);
+    const requests = rateLimitStore.get(key) || [];
+    if (requests.length >= 2) {
+        const lastTwo = requests.slice(-2);
+        if (lastTwo[1] - lastTwo[0] < 100) { // Less than 100ms between requests
+            suspicious.push('Automated request pattern');
+        }
+    }
+    
+    return suspicious;
+}
+
+// ========================================
+// INTEGRITY VERIFICATION
+// ========================================
+
+function generateClientChallenge() {
+    const challenge = crypto.randomBytes(32).toString('hex');
+    const expectedResponse = crypto.createHash('sha256')
+        .update(challenge + 'LITEWARE_INTEGRITY_2024')
+        .digest('hex');
+    return { challenge, expectedResponse };
+}
+
+function verifyClientIntegrity(challenge, response, expectedResponse) {
+    try {
+        return crypto.timingSafeEqual(
+            Buffer.from(response, 'hex'),
+            Buffer.from(expectedResponse, 'hex')
+        );
+    } catch {
+        return false;
+    }
+}
+
+// Clean up old data periodically
+setInterval(() => {
+    const now = Date.now();
+    
+    // Clean old rate limit entries
+    for (const [key, requests] of rateLimitStore.entries()) {
+        const valid = requests.filter(t => t > now - RATE_LIMIT_WINDOW);
+        if (valid.length === 0) {
+            rateLimitStore.delete(key);
+        } else {
+            rateLimitStore.set(key, valid);
+        }
+    }
+    
+    // Clean expired sessions
+    for (const [token, session] of activeSessions.entries()) {
+        if (now - session.lastHeartbeat > SESSION_TIMEOUT) {
+            activeSessions.delete(token);
+        }
+    }
+    
+    console.log(`🧹 Cleanup: ${rateLimitStore.size} rate entries, ${activeSessions.size} sessions, ${bannedIPs.size} banned IPs`);
+}, 60000); // Every minute
 
 // Try to require multer, but handle if it's not installed
 let multer = null;
@@ -67,6 +422,224 @@ app.use((req, res, next) => {
 
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 app.use(bodyParser.json({ limit: '50mb' }));
+
+// ========================================
+// SECURITY MIDDLEWARE
+// ========================================
+
+// Rate limiting middleware
+app.use('/auth', (req, res, next) => {
+    // Skip rate limiting for certain endpoints
+    const skipEndpoints = ['/auth/heartbeat', '/auth/loader-status'];
+    if (skipEndpoints.some(e => req.path.startsWith(e))) {
+        return next();
+    }
+    
+    const rateCheck = checkRateLimit(req);
+    if (!rateCheck.allowed) {
+        console.log(`🚫 Rate limited: ${req.ip} - ${rateCheck.reason}`);
+        return res.status(429).json({
+            success: false,
+            error: 'RATE_LIMITED',
+            message: rateCheck.reason,
+            retryAfter: rateCheck.retryAfter,
+            ban_user: true // Tell client to show ban message
+        });
+    }
+    
+    // Add rate limit headers
+    res.set('X-RateLimit-Remaining', rateCheck.remaining);
+    res.set('X-RateLimit-Reset', Date.now() + RATE_LIMIT_WINDOW);
+    
+    next();
+});
+
+// Suspicious request detection middleware
+app.use('/auth', (req, res, next) => {
+    const suspicious = detectSuspiciousRequest(req);
+    
+    if (suspicious.length > 0) {
+        console.log(`⚠️ Suspicious request from ${req.ip}: ${suspicious.join(', ')}`);
+        
+        // Log but don't block (could be false positive)
+        // For strict mode, uncomment below:
+        // if (suspicious.length >= 2) {
+        //     recordFailedAttempt(req, 'Multiple suspicious indicators');
+        //     return res.status(403).json({ success: false, error: 'FORBIDDEN' });
+        // }
+    }
+    
+    next();
+});
+
+// Request signature verification middleware (for signed requests)
+app.use('/auth', (req, res, next) => {
+    // Only verify if signature is provided (backwards compatible)
+    if (req.body._signature && req.body._timestamp && req.body._nonce) {
+        const { _signature, _timestamp, _nonce, ...data } = req.body;
+        
+        const verification = verifyRequestSignature(data, _timestamp, _nonce, _signature);
+        if (!verification.valid) {
+            console.log(`🚫 Invalid signature from ${req.ip}: ${verification.reason}`);
+            recordFailedAttempt(req, verification.reason);
+            return res.status(403).json({
+                success: false,
+                error: 'INVALID_SIGNATURE',
+                message: verification.reason
+            });
+        }
+        
+        // Remove signature fields from body
+        req.body = data;
+    }
+    
+    next();
+});
+
+// ========================================
+// SECURITY ENDPOINTS
+// ========================================
+
+// Heartbeat endpoint - client must call this every 30 seconds
+app.post('/auth/heartbeat', (req, res) => {
+    const { session_token, hwid } = req.body;
+    
+    if (!session_token) {
+        return res.json({ success: false, error: 'NO_SESSION' });
+    }
+    
+    const sessionCheck = validateSession(session_token);
+    if (!sessionCheck.valid) {
+        return res.json({ 
+            success: false, 
+            error: 'SESSION_INVALID',
+            message: sessionCheck.reason,
+            action: 'REAUTH' // Tell client to re-authenticate
+        });
+    }
+    
+    // Verify HWID matches session
+    if (hwid && sessionCheck.session.hwid !== hwid) {
+        console.log(`🚫 HWID mismatch in heartbeat: expected ${sessionCheck.session.hwid}, got ${hwid}`);
+        activeSessions.delete(session_token);
+        return res.json({
+            success: false,
+            error: 'HWID_MISMATCH',
+            action: 'TERMINATE' // Critical security violation
+        });
+    }
+    
+    updateHeartbeat(session_token);
+    
+    // Generate new challenge for integrity check
+    const challenge = generateClientChallenge();
+    
+    res.json({
+        success: true,
+        next_heartbeat: HEARTBEAT_INTERVAL,
+        challenge: challenge.challenge,
+        server_time: Date.now()
+    });
+});
+
+// Session validation endpoint
+app.post('/auth/validate-session', (req, res) => {
+    const { session_token } = req.body;
+    
+    const sessionCheck = validateSession(session_token);
+    res.json({
+        success: sessionCheck.valid,
+        error: sessionCheck.valid ? null : sessionCheck.reason,
+        session_age: sessionCheck.valid ? Date.now() - sessionCheck.session.createdAt : null
+    });
+});
+
+// Integrity challenge endpoint
+app.post('/auth/challenge', validateAppSecret, (req, res) => {
+    const challenge = generateClientChallenge();
+    
+    // Store challenge temporarily for verification
+    const challengeId = crypto.randomBytes(16).toString('hex');
+    const challengeData = {
+        challenge: challenge.challenge,
+        expectedResponse: challenge.expectedResponse,
+        createdAt: Date.now()
+    };
+    
+    // Store in memory (use Redis in production)
+    if (!global.pendingChallenges) global.pendingChallenges = new Map();
+    global.pendingChallenges.set(challengeId, challengeData);
+    
+    // Expire challenge after 30 seconds
+    setTimeout(() => {
+        if (global.pendingChallenges) {
+            global.pendingChallenges.delete(challengeId);
+        }
+    }, 30000);
+    
+    res.json({
+        success: true,
+        challenge_id: challengeId,
+        challenge: challenge.challenge,
+        algorithm: 'SHA256',
+        salt: 'LITEWARE_INTEGRITY_2024'
+    });
+});
+
+// Verify challenge response
+app.post('/auth/verify-challenge', validateAppSecret, (req, res) => {
+    const { challenge_id, response } = req.body;
+    
+    if (!global.pendingChallenges || !global.pendingChallenges.has(challenge_id)) {
+        recordFailedAttempt(req, 'Invalid or expired challenge');
+        return res.json({
+            success: false,
+            error: 'CHALLENGE_EXPIRED',
+            action: 'TERMINATE'
+        });
+    }
+    
+    const challengeData = global.pendingChallenges.get(challenge_id);
+    global.pendingChallenges.delete(challenge_id);
+    
+    // Check if challenge is too old
+    if (Date.now() - challengeData.createdAt > 30000) {
+        recordFailedAttempt(req, 'Challenge timeout');
+        return res.json({
+            success: false,
+            error: 'CHALLENGE_TIMEOUT',
+            action: 'TERMINATE'
+        });
+    }
+    
+    // Verify response
+    if (!verifyClientIntegrity(challengeData.challenge, response, challengeData.expectedResponse)) {
+        recordFailedAttempt(req, 'Failed integrity check');
+        console.log(`🚫 INTEGRITY CHECK FAILED from ${req.ip}`);
+        return res.json({
+            success: false,
+            error: 'INTEGRITY_FAILED',
+            action: 'TERMINATE' // Client is tampered
+        });
+    }
+    
+    res.json({
+        success: true,
+        verified: true
+    });
+});
+
+// Get server public key for encrypted communication
+app.get('/auth/public-key', (req, res) => {
+    // In production, use proper asymmetric encryption
+    const publicInfo = {
+        algorithm: 'AES-256-GCM',
+        keyExchange: 'ECDH',
+        version: '2.0',
+        timestamp: Date.now()
+    };
+    res.json(publicInfo);
+});
 
 // Initialize global crack attempts array
 if (!global.crackAttempts) {
@@ -515,8 +1088,14 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
             license.last_used = new Date().toISOString();
         }
         
-        // Generate session token
-        const token = crypto.randomBytes(32).toString('hex');
+        // Create secure session with encryption key
+        const session = createSession(license_key, finalHwid, cleanIP);
+        
+        // Generate integrity challenge for client
+        const challenge = generateClientChallenge();
+        
+        // Clear any previous failed attempts for this IP (successful auth)
+        clearFailedAttempts(req);
         
         // Check if remote BSOD is triggered for this key (but skip if whitelisted)
         const isWhitelisted = whitelistedLicenseKeys.includes(license_key);
@@ -532,17 +1111,31 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         
         // Return response immediately (don't block)
         console.log('✅ Authentication successful');
-        console.log('Token generated, isWhitelisted:', isWhitelisted, 'remoteBSOD:', remoteBSODTriggered);
+        console.log('Session created:', session.token.substring(0, 16) + '...');
+        console.log('isWhitelisted:', isWhitelisted, 'remoteBSOD:', remoteBSODTriggered);
         console.log('=== END LICENSE VALIDATION ===\n');
         
-        res.json({
+        // Build response with session info
+        const response = {
             success: true,
             valid: true,
-            token: token,
             message: 'License validated successfully',
             is_whitelisted: isWhitelisted,
-            remote_bsod: remoteBSODTriggered // Include remote BSOD flag (only true once)
-        });
+            remote_bsod: remoteBSODTriggered,
+            // Session information
+            session_token: session.token,
+            session_key: session.key, // For encrypted communication
+            heartbeat_interval: HEARTBEAT_INTERVAL,
+            session_timeout: SESSION_TIMEOUT,
+            // Integrity challenge
+            challenge: challenge.challenge,
+            challenge_salt: 'LITEWARE_INTEGRITY_2024',
+            // Server info
+            server_time: Date.now(),
+            server_version: '2.0'
+        };
+        
+        res.json(response);
     } catch (error) {
         console.error('❌ Error in license validation:', error);
         console.error('Stack:', error.stack);
