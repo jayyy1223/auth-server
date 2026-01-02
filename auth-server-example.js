@@ -1044,6 +1044,8 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
     console.log('URL:', req.url);
     console.log('Request IP:', req.ip || req.connection.remoteAddress || 'Unknown');
     console.log('Request headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Request body keys (before multer):', Object.keys(req.body || {}));
+    console.log('Request body (before multer):', JSON.stringify(req.body || {}, null, 2));
     
     // Check content type to determine if multipart
     const contentType = req.headers['content-type'] || '';
@@ -1065,13 +1067,20 @@ app.post('/auth/log-crack-attempt', (req, res, next) => {
             
             // Validate app secret from form data (after multer processes it)
             const appSecret = req.body.app_secret;
-            console.log('App secret received:', appSecret ? 'Present' : 'Missing');
+            console.log('App secret received:', appSecret ? `Present (${appSecret.length} chars)` : 'Missing');
             console.log('App secret matches:', appSecret === APP_SECRET);
+            console.log('Expected APP_SECRET length:', APP_SECRET ? APP_SECRET.length : 0);
+            console.log('Received app_secret length:', appSecret ? appSecret.length : 0);
             
             if (appSecret !== APP_SECRET) {
-                console.error('Invalid app secret! Expected:', APP_SECRET, 'Got:', appSecret);
+                console.error('❌ Invalid app secret!');
+                console.error('   Expected:', APP_SECRET);
+                console.error('   Got:', appSecret);
+                console.error('   Match:', appSecret === APP_SECRET);
                 return res.json({ success: false, message: 'Invalid application secret' });
             }
+            
+            console.log('✅ App secret validated successfully');
             
             // Handle multipart request - extract all fields including unique_id
             const { 
@@ -1181,6 +1190,8 @@ function handleJsonCrackAttempt(req, res) {
     console.log('=== HANDLING JSON CRACK ATTEMPT ===');
     console.log('Request body:', JSON.stringify(req.body, null, 2));
     console.log('Request IP:', req.ip || req.connection.remoteAddress || 'Unknown');
+    console.log('App secret in body:', req.body.app_secret ? `Present (${req.body.app_secret.length} chars)` : 'Missing');
+    console.log('App secret matches:', req.body.app_secret === APP_SECRET);
     
     const { 
         attempt_number, 
