@@ -259,9 +259,126 @@ function validateAppSecret(req, res, next) {
     next();
 }
 
+// ========================================
+// LOADER STATUS CONTROL
+// ========================================
+
+// Global loader status (auto-updates for all clients)
+let loaderStatus = {
+    enabled: true,
+    message: '',
+    disabledAt: null,
+    lastUpdated: new Date().toISOString()
+};
+
+// Loader status file for persistence
+const LOADER_STATUS_FILE = path.join(__dirname, 'loader_status.json');
+
+// Load loader status from file on startup
+function loadLoaderStatus() {
+    try {
+        if (fs.existsSync(LOADER_STATUS_FILE)) {
+            const data = fs.readFileSync(LOADER_STATUS_FILE, 'utf8');
+            const parsed = JSON.parse(data);
+            loaderStatus = { ...loaderStatus, ...parsed };
+            console.log('✅ Loaded loader status from file:', loaderStatus.enabled ? 'ENABLED' : 'DISABLED');
+        }
+    } catch (error) {
+        console.error('Error loading loader status:', error.message);
+    }
+}
+
+// Save loader status to file
+function saveLoaderStatus() {
+    try {
+        fs.writeFileSync(LOADER_STATUS_FILE, JSON.stringify(loaderStatus, null, 2), 'utf8');
+    } catch (error) {
+        console.error('Error saving loader status:', error.message);
+    }
+}
+
+// Load status on startup
+loadLoaderStatus();
+
+// Get loader status endpoint (for dashboard polling)
+app.post('/auth/loader-status', validateAppSecret, (req, res) => {
+    res.json({
+        success: true,
+        enabled: loaderStatus.enabled,
+        message: loaderStatus.message,
+        disabledAt: loaderStatus.disabledAt,
+        lastUpdated: loaderStatus.lastUpdated
+    });
+});
+
+// Set loader status endpoint (enable/disable)
+app.post('/auth/set-loader-status', validateAppSecret, (req, res) => {
+    const { enabled, message } = req.body;
+    
+    loaderStatus.enabled = enabled !== false;
+    loaderStatus.message = message || (enabled ? '' : 'Loader disabled/updating');
+    loaderStatus.lastUpdated = new Date().toISOString();
+    
+    if (!enabled) {
+        loaderStatus.disabledAt = new Date().toISOString();
+    } else {
+        loaderStatus.disabledAt = null;
+    }
+    
+    saveLoaderStatus();
+    
+    console.log(`🔄 Loader status changed to: ${loaderStatus.enabled ? 'ENABLED' : 'DISABLED'}`);
+    
+    res.json({
+        success: true,
+        message: `Loader ${loaderStatus.enabled ? 'enabled' : 'disabled'} successfully`,
+        status: loaderStatus
+    });
+});
+
+// Check loader status endpoint (for loader to check before auth)
+app.post('/auth/check-loader', (req, res) => {
+    if (!loaderStatus.enabled) {
+        res.json({
+            success: false,
+            disabled: true,
+            message: loaderStatus.message || 'Loader disabled/updating',
+            closeAfter: 5000 // Close after 5 seconds
+        });
+    } else {
+        res.json({
+            success: true,
+            disabled: false,
+            message: ''
+        });
+    }
+});
+
+// Also add GET endpoint for simple status check
+app.get('/auth/loader-status', (req, res) => {
+    res.json({
+        enabled: loaderStatus.enabled,
+        message: loaderStatus.message,
+        lastUpdated: loaderStatus.lastUpdated
+    });
+});
+
+// ========================================
+
 // License validation endpoint
 app.post('/auth/license', validateAppSecret, (req, res) => {
     try {
+        // Check if loader is disabled first
+        if (!loaderStatus.enabled) {
+            console.log('⚠️ License request rejected - Loader is disabled');
+            return res.json({
+                success: false,
+                loader_disabled: true,
+                message: loaderStatus.message || 'Loader disabled/updating',
+                closeAfter: 5000 // Tell client to close after 5 seconds
+            });
+        }
+        
         console.log('=== LICENSE VALIDATION REQUEST ===');
         console.log('Request body:', JSON.stringify(req.body, null, 2));
         console.log('Headers:', JSON.stringify(req.headers, null, 2));
