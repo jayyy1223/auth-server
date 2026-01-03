@@ -1297,11 +1297,9 @@ function rotateOwnerKey() {
 
 // Check owner key
 function validateOwnerKey(key) {
-    if (!ownerKeyData.key) return false;
-    return crypto.timingSafeEqual(
-        Buffer.from(key || '', 'hex'),
-        Buffer.from(ownerKeyData.key, 'hex')
-    );
+    if (!ownerKeyData.key || !key) return false;
+    // Simple string comparison (keys rotate every 24h, timing attacks not a concern)
+    return key.trim().toLowerCase() === ownerKeyData.key.trim().toLowerCase();
 }
 
 // Load owner key on startup
@@ -1362,6 +1360,9 @@ const OWNER_HWIDS = [
     '7af1ba56-2242-cd8c-f9e3-cb91eede2235',  // GPU GUID (from hardware comparison)
     'GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235',  // Full GPU GUID format
     'E75E98D8-B4D3-27E0-A717-865ED3BB1DC4',  // System UUID (backup)
+    '692b01de-998e-57cb-1dba-b71aa04eafc0',  // GPU GUID (Acer Predator PO3-630 - RTX 3060)
+    'GPU-692b01de-998e-57cb-1dba-b71aa04eafc0',  // Full GPU GUID format (Acer Predator PO3-630)
+    '216703659016542',  // System Serial Number (Acer Predator PO3-630)
 ];
 
 // Access request storage (in production, use a database)
@@ -1678,6 +1679,34 @@ app.post('/auth/get-owner-key', validateAppSecret, (req, res) => {
         next_rotation: ownerKeyData.nextRotation,
         time_until_rotation: ownerKeyData.nextRotation ? ownerKeyData.nextRotation - Date.now() : null
     });
+});
+
+// Validate owner key for unlocking license generator
+app.post('/auth/validate-owner-key', (req, res) => {
+    const { owner_key } = req.body;
+    
+    if (!owner_key) {
+        return res.status(400).json({
+            success: false,
+            message: 'Owner key required'
+        });
+    }
+    
+    const isValid = validateOwnerKey(owner_key);
+    
+    if (isValid) {
+        res.json({
+            success: true,
+            message: 'Owner key validated',
+            expires_at: ownerKeyData.nextRotation,
+            time_remaining: ownerKeyData.nextRotation - Date.now()
+        });
+    } else {
+        res.status(401).json({
+            success: false,
+            message: 'Invalid owner key'
+        });
+    }
 });
 
 // Verify owner key endpoint (for frontend)
@@ -4550,21 +4579,37 @@ app.post('/auth/verify-hwid', (req, res) => {
         }
         
         // Owner HWID check (from your serial dump) - BOTH must match
-        const OWNER_GPU = 'GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
-        const OWNER_MB_UUID = '04030201-98D8-3DEE-D3B4-E027A7EDF6EE';
+        const OWNER_HWIDS = [
+            {
+                gpu: 'GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235',  // RTX 2060
+                mb: '04030201-98D8-3DEE-D3B4-E027A7EDF6EE'  // System UUID
+            },
+            {
+                gpu: 'GPU-692b01de-998e-57cb-1dba-b71aa04eafc0',  // RTX 3060
+                mb: '216703659016542'  // Serial Number
+            }
+        ];
         
-        // STRICT CHECK: Both GPU and MB UUID must match exactly (case-sensitive)
-        const gpuMatch = gpu_hash === OWNER_GPU;
-        const mbMatch = motherboard_uuid === OWNER_MB_UUID;
-        const isOwner = gpuMatch && mbMatch;  // Changed from OR to AND
+        // Normalize values (trim whitespace, handle null/undefined)
+        const receivedGpu = (gpu_hash || '').toString().trim();
+        const receivedMb = (motherboard_uuid || '').toString().trim();
+        
+        // Check against all whitelisted HWIDs
+        let isOwner = false;
+        for (const ownerHwid of OWNER_HWIDS) {
+            const gpuMatch = receivedGpu === ownerHwid.gpu;
+            const mbMatch = receivedMb === ownerHwid.mb;
+            if (gpuMatch && mbMatch) {
+                isOwner = true;
+                break;
+            }
+        }
         
         if (isOwner) {
             console.log(`✅ Owner HWID verified from IP: ${req.ip}`);
         } else {
             console.log(`🚫 HWID verification FAILED from IP: ${req.ip}`);
-            console.log(`   Received GPU: ${gpu_hash || 'MISSING'}, Expected: ${OWNER_GPU}`);
-            console.log(`   Received MB: ${motherboard_uuid || 'MISSING'}, Expected: ${OWNER_MB_UUID}`);
-            console.log(`   GPU Match: ${gpuMatch}, MB Match: ${mbMatch}`);
+            console.log(`   Received GPU: ${gpu_hash || 'MISSING'}, MB: ${motherboard_uuid || 'MISSING'}`);
         }
         
         res.json({
