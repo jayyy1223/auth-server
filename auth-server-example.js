@@ -725,6 +725,12 @@ app.use('/auth', (req, res, next) => {
     // Skip for OPTIONS
     if (req.method === 'OPTIONS') return next();
     
+    // Skip for admin endpoints (they use validateAppSecret for auth)
+    const path = req.path || req.url || '';
+    if (path.includes('/auth/admin/') || path.startsWith('/auth/admin/')) {
+        return next();
+    }
+    
     // Skip for certain safe endpoints
     const safeEndpoints = ['/auth/', '/auth/health'];
     if (safeEndpoints.includes(req.path)) return next();
@@ -2031,18 +2037,26 @@ function validateAppSecret(req, res, next) {
     let appSecret = req.body.app_secret || req.body.app_secret;
     const { _obf_key, _obf_enabled } = req.body;
     
+    // Debug logging
+    console.log(`[validateAppSecret] Path: ${req.path}, IP: ${req.ip || req.connection.remoteAddress}`);
+    console.log(`[validateAppSecret] app_secret received: ${appSecret ? 'Present (' + appSecret.length + ' chars)' : 'Missing'}`);
+    console.log(`[validateAppSecret] Expected APP_SECRET: ${APP_SECRET}`);
+    
     // Deobfuscate app_secret if obfuscation is enabled
     if (_obf_enabled === '1' && _obf_key && appSecret) {
         try {
             appSecret = deobfuscateData(appSecret, _obf_key);
+            console.log(`[validateAppSecret] Deobfuscated app_secret: ${appSecret}`);
         } catch (e) {
             console.error('Deobfuscation error in middleware:', e);
         }
     }
     
     if (appSecret !== APP_SECRET) {
+        console.log(`[validateAppSecret] ❌ Invalid app_secret! Expected: "${APP_SECRET}", Got: "${appSecret}"`);
         return res.json({ success: false, message: 'Invalid application secret' });
     }
+    console.log(`[validateAppSecret] ✅ App secret validated successfully`);
     next();
 }
 
