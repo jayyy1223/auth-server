@@ -29,6 +29,236 @@ const crackAttemptCounter = new Map(); // hwid -> { count, firstAttempt }
 const RATE_LIMIT_WINDOW = 60000;
 const MAX_REQUESTS = 100;
 
+// ========================================
+// DDOS PROTECTION CONFIGURATION
+// ========================================
+const ddosProtection = {
+    // Request tracking per IP
+    requestCounts: new Map(),
+    
+    // Sliding window tracking
+    slidingWindow: new Map(),
+    
+    // Temporary bans (auto-expire)
+    tempBans: new Map(),
+    
+    // Suspicious IPs (elevated monitoring)
+    suspiciousIPs: new Set(),
+    
+    // Connection tracking
+    connectionCounts: new Map(),
+    
+    // Burst detection
+    burstTracking: new Map(),
+    
+    // Settings
+    settings: {
+        // Requests per second threshold
+        maxRequestsPerSecond: 10,
+        
+        // Requests per minute threshold
+        maxRequestsPerMinute: 60,
+        
+        // Burst threshold (requests in 100ms)
+        burstThreshold: 5,
+        
+        // Auto-ban duration (5 minutes)
+        tempBanDuration: 5 * 60 * 1000,
+        
+        // Suspicious threshold before ban
+        suspiciousThreshold: 3,
+        
+        // Max concurrent connections per IP
+        maxConnectionsPerIP: 20,
+        
+        // Slowloris protection - max request time
+        maxRequestTime: 30000,
+        
+        // Request size limits
+        maxBodySize: 1024 * 1024, // 1MB
+        
+        // Challenge-response for suspicious IPs
+        challengeEnabled: true
+    },
+    
+    // Statistics
+    stats: {
+        totalBlocked: 0,
+        totalChallenged: 0,
+        activeBans: 0,
+        peakRequestsPerSecond: 0
+    }
+};
+
+// DDoS protection functions
+const ddos = {
+    // Check if IP is temporarily banned
+    isTempBanned: (ip) => {
+        const ban = ddosProtection.tempBans.get(ip);
+        if (!ban) return false;
+        
+        if (Date.now() > ban.expires) {
+            ddosProtection.tempBans.delete(ip);
+            ddosProtection.stats.activeBans--;
+            return false;
+        }
+        return true;
+    },
+    
+    // Add temporary ban
+    addTempBan: (ip, reason) => {
+        ddosProtection.tempBans.set(ip, {
+            reason: reason,
+            created: Date.now(),
+            expires: Date.now() + ddosProtection.settings.tempBanDuration
+        });
+        ddosProtection.stats.activeBans++;
+        ddosProtection.stats.totalBlocked++;
+        console.log(`🛡️ DDoS: Temp banned ${ip} - ${reason}`);
+    },
+    
+    // Track request in sliding window
+    trackRequest: (ip) => {
+        const now = Date.now();
+        const second = Math.floor(now / 1000);
+        const minute = Math.floor(now / 60000);
+        
+        // Per-second tracking
+        const secKey = `${ip}:${second}`;
+        const secCount = (ddosProtection.slidingWindow.get(secKey) || 0) + 1;
+        ddosProtection.slidingWindow.set(secKey, secCount);
+        
+        // Update peak
+        if (secCount > ddosProtection.stats.peakRequestsPerSecond) {
+            ddosProtection.stats.peakRequestsPerSecond = secCount;
+        }
+        
+        // Per-minute tracking
+        const minKey = `${ip}:min:${minute}`;
+        const minCount = (ddosProtection.slidingWindow.get(minKey) || 0) + 1;
+        ddosProtection.slidingWindow.set(minKey, minCount);
+        
+        // Burst tracking (100ms window)
+        const burstWindow = Math.floor(now / 100);
+        const burstKey = `${ip}:burst:${burstWindow}`;
+        const burstCount = (ddosProtection.burstTracking.get(burstKey) || 0) + 1;
+        ddosProtection.burstTracking.set(burstKey, burstCount);
+        
+        // Clean old entries periodically
+        if (Math.random() < 0.01) {
+            ddos.cleanOldEntries();
+        }
+        
+        return { secCount, minCount, burstCount };
+    },
+    
+    // Clean old tracking entries
+    cleanOldEntries: () => {
+        const now = Date.now();
+        const currentSecond = Math.floor(now / 1000);
+        const currentMinute = Math.floor(now / 60000);
+        
+        for (const [key, _] of ddosProtection.slidingWindow) {
+            const parts = key.split(':');
+            if (parts[1] === 'min') {
+                const minute = parseInt(parts[2]);
+                if (currentMinute - minute > 2) {
+                    ddosProtection.slidingWindow.delete(key);
+                }
+            } else {
+                const second = parseInt(parts[1]);
+                if (currentSecond - second > 5) {
+                    ddosProtection.slidingWindow.delete(key);
+                }
+            }
+        }
+        
+        // Clean burst tracking
+        const currentBurst = Math.floor(now / 100);
+        for (const [key, _] of ddosProtection.burstTracking) {
+            const burst = parseInt(key.split(':')[2]);
+            if (currentBurst - burst > 50) {
+                ddosProtection.burstTracking.delete(key);
+            }
+        }
+    },
+    
+    // Check if request should be blocked
+    shouldBlock: (ip, counts) => {
+        const { secCount, minCount, burstCount } = counts;
+        const settings = ddosProtection.settings;
+        
+        // Burst attack detection
+        if (burstCount > settings.burstThreshold) {
+            return { block: true, reason: 'Burst attack detected' };
+        }
+        
+        // Rate limit per second
+        if (secCount > settings.maxRequestsPerSecond) {
+            return { block: true, reason: 'Rate limit exceeded (per second)' };
+        }
+        
+        // Rate limit per minute
+        if (minCount > settings.maxRequestsPerMinute) {
+            return { block: true, reason: 'Rate limit exceeded (per minute)' };
+        }
+        
+        return { block: false };
+    },
+    
+    // Mark IP as suspicious
+    markSuspicious: (ip) => {
+        ddosProtection.suspiciousIPs.add(ip);
+        
+        // Track suspicious count
+        const key = `suspicious:${ip}`;
+        const count = (ddosProtection.requestCounts.get(key) || 0) + 1;
+        ddosProtection.requestCounts.set(key, count);
+        
+        // Auto-ban after threshold
+        if (count >= ddosProtection.settings.suspiciousThreshold) {
+            ddos.addTempBan(ip, 'Repeated suspicious activity');
+            return true;
+        }
+        
+        return false;
+    },
+    
+    // Generate challenge token
+    generateChallenge: (ip) => {
+        const token = crypto.randomBytes(16).toString('hex');
+        const challenge = {
+            token: token,
+            created: Date.now(),
+            expires: Date.now() + 60000 // 1 minute
+        };
+        ddosProtection.requestCounts.set(`challenge:${ip}`, challenge);
+        ddosProtection.stats.totalChallenged++;
+        return token;
+    },
+    
+    // Verify challenge
+    verifyChallenge: (ip, token) => {
+        const challenge = ddosProtection.requestCounts.get(`challenge:${ip}`);
+        if (!challenge) return false;
+        if (Date.now() > challenge.expires) return false;
+        if (challenge.token !== token) return false;
+        
+        // Clear challenge on success
+        ddosProtection.requestCounts.delete(`challenge:${ip}`);
+        ddosProtection.suspiciousIPs.delete(ip);
+        return true;
+    },
+    
+    // Get stats
+    getStats: () => ({
+        ...ddosProtection.stats,
+        activeBans: ddosProtection.tempBans.size,
+        suspiciousIPs: ddosProtection.suspiciousIPs.size,
+        trackedIPs: ddosProtection.slidingWindow.size
+    })
+};
+
 // Server state flags
 let serverDisabled = false;
 let maintenanceMode = false;
@@ -83,7 +313,7 @@ const generateLicenseKey = () => {
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-DDoS-Challenge');
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
 });
@@ -91,7 +321,91 @@ app.use((req, res, next) => {
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 app.use(bodyParser.json({ limit: '50mb' }));
 
-// Rate limiting (skip for whitelisted)
+// ========================================
+// DDOS PROTECTION MIDDLEWARE
+// ========================================
+app.use((req, res, next) => {
+    const ip = getIP(req);
+    
+    // Skip for whitelisted IPs
+    if (isWhitelisted(ip)) return next();
+    
+    // Check permanent ban
+    if (bannedIPs.has(ip)) {
+        return res.status(403).json({ 
+            success: false, 
+            message: 'Access denied',
+            ddos_blocked: true 
+        });
+    }
+    
+    // Check temporary DDoS ban
+    if (ddos.isTempBanned(ip)) {
+        return res.status(429).json({ 
+            success: false, 
+            message: 'Too many requests. Please try again later.',
+            ddos_blocked: true,
+            retry_after: Math.ceil((ddosProtection.tempBans.get(ip).expires - Date.now()) / 1000)
+        });
+    }
+    
+    // Track this request
+    const counts = ddos.trackRequest(ip);
+    
+    // Check if should block
+    const blockCheck = ddos.shouldBlock(ip, counts);
+    if (blockCheck.block) {
+        // First offense - mark suspicious
+        if (!ddosProtection.suspiciousIPs.has(ip)) {
+            ddos.markSuspicious(ip);
+            return res.status(429).json({
+                success: false,
+                message: 'Rate limit exceeded. Slow down.',
+                ddos_warning: true
+            });
+        }
+        
+        // Repeated offense - temp ban
+        ddos.addTempBan(ip, blockCheck.reason);
+        return res.status(429).json({
+            success: false,
+            message: 'You have been temporarily blocked for excessive requests.',
+            ddos_blocked: true,
+            retry_after: ddosProtection.settings.tempBanDuration / 1000
+        });
+    }
+    
+    // Challenge suspicious IPs
+    if (ddosProtection.suspiciousIPs.has(ip) && ddosProtection.settings.challengeEnabled) {
+        const challengeToken = req.headers['x-ddos-challenge'];
+        
+        if (!challengeToken) {
+            // Issue challenge
+            const newChallenge = ddos.generateChallenge(ip);
+            return res.status(429).json({
+                success: false,
+                message: 'Challenge required',
+                ddos_challenge: true,
+                challenge_token: newChallenge,
+                instructions: 'Include X-DDoS-Challenge header with this token in your next request'
+            });
+        }
+        
+        // Verify challenge
+        if (!ddos.verifyChallenge(ip, challengeToken)) {
+            ddos.markSuspicious(ip);
+            return res.status(429).json({
+                success: false,
+                message: 'Invalid challenge response',
+                ddos_blocked: true
+            });
+        }
+    }
+    
+    next();
+});
+
+// Rate limiting (skip for whitelisted) - Additional layer
 app.use((req, res, next) => {
     const ip = getIP(req);
     if (isWhitelisted(ip)) return next();
@@ -847,12 +1161,66 @@ app.post('/auth/emergency-reset', (req, res) => {
     bannedHWIDs.clear();
     rateLimitStore.clear();
     crackAttemptCounter.clear();
+    ddosProtection.tempBans.clear();
+    ddosProtection.suspiciousIPs.clear();
+    ddosProtection.slidingWindow.clear();
+    ddosProtection.burstTracking.clear();
     serverDisabled = false;
     maintenanceMode = false;
     lockdownMode = false;
     websiteLocked = false;
     authEnabled = true;
     res.json({ success: true, message: 'Emergency reset complete' });
+});
+
+// ========================================
+// DDOS PROTECTION ADMIN ENDPOINTS
+// ========================================
+app.post('/auth/admin/ddos-stats', (req, res) => {
+    res.json({
+        success: true,
+        stats: ddos.getStats(),
+        settings: ddosProtection.settings,
+        temp_bans: Array.from(ddosProtection.tempBans.entries()).map(([ip, data]) => ({
+            ip: ip,
+            reason: data.reason,
+            expires_in: Math.ceil((data.expires - Date.now()) / 1000)
+        })),
+        suspicious_ips: Array.from(ddosProtection.suspiciousIPs)
+    });
+});
+
+app.post('/auth/admin/ddos-unban', (req, res) => {
+    const { ip } = req.body;
+    if (!ip) return res.json({ success: false, message: 'IP required' });
+    
+    ddosProtection.tempBans.delete(ip);
+    ddosProtection.suspiciousIPs.delete(ip);
+    ddosProtection.requestCounts.delete(`suspicious:${ip}`);
+    
+    res.json({ success: true, message: `DDoS ban removed for ${ip}` });
+});
+
+app.post('/auth/admin/ddos-clear-all', (req, res) => {
+    ddosProtection.tempBans.clear();
+    ddosProtection.suspiciousIPs.clear();
+    ddosProtection.slidingWindow.clear();
+    ddosProtection.burstTracking.clear();
+    ddosProtection.stats.activeBans = 0;
+    
+    res.json({ success: true, message: 'All DDoS bans cleared' });
+});
+
+app.post('/auth/admin/ddos-settings', (req, res) => {
+    const { maxRequestsPerSecond, maxRequestsPerMinute, burstThreshold, tempBanDuration, challengeEnabled } = req.body;
+    
+    if (maxRequestsPerSecond !== undefined) ddosProtection.settings.maxRequestsPerSecond = maxRequestsPerSecond;
+    if (maxRequestsPerMinute !== undefined) ddosProtection.settings.maxRequestsPerMinute = maxRequestsPerMinute;
+    if (burstThreshold !== undefined) ddosProtection.settings.burstThreshold = burstThreshold;
+    if (tempBanDuration !== undefined) ddosProtection.settings.tempBanDuration = tempBanDuration;
+    if (challengeEnabled !== undefined) ddosProtection.settings.challengeEnabled = challengeEnabled;
+    
+    res.json({ success: true, message: 'DDoS settings updated', settings: ddosProtection.settings });
 });
 
 // ========================================
@@ -881,3 +1249,4 @@ const PORT = process.env.PORT || 3000;
 
 process.on('uncaughtException', (err) => console.error('Error:', err.message));
 process.on('unhandledRejection', (reason) => console.error('Rejection:', reason));
+
