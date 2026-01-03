@@ -188,10 +188,25 @@ function advancedRateLimit(req, res, next) {
         return next();
     }
     
+    // #region agent log
+    const fs = require('fs');
+    const logPath = 'c:\\Users\\jay\\Downloads\\new liteware spoof\\.cursor\\debug.log';
+    try {
+        const logEntry = JSON.stringify({location:'auth-server-example.js:184',message:'advancedRateLimit entry',data:{path:path,method:req.method},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'}) + '\n';
+        fs.appendFileSync(logPath, logEntry);
+    } catch(e) {}
+    // #endregion
+    
     const ip = req.ip || req.connection.remoteAddress;
     
     // Check if IP is banned
     if (bannedIPs.has(ip)) {
+        // #region agent log
+        try {
+            const logEntry = JSON.stringify({location:'auth-server-example.js:194',message:'IP banned in rate limiter',data:{ip:ip,path:path},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'}) + '\n';
+            fs.appendFileSync(logPath, logEntry);
+        } catch(e) {}
+        // #endregion
         console.log(`🚫 Banned IP attempted access: ${ip}`);
         return res.status(403).json({ 
             success: false, 
@@ -1727,46 +1742,70 @@ app.post('/auth/verify-owner-key', (req, res) => {
     
     console.log('[OWNER KEY VERIFY] Received key length:', owner_key ? owner_key.length : 0);
     console.log('[OWNER KEY VERIFY] Expected key length:', ownerKeyData.key ? ownerKeyData.key.length : 0);
-    console.log('[OWNER KEY VERIFY] Received key (first 10 chars):', owner_key ? owner_key.substring(0, 10) : 'null');
-    console.log('[OWNER KEY VERIFY] Expected key (first 10 chars):', ownerKeyData.key ? ownerKeyData.key.substring(0, 10) : 'null');
+    console.log('[OWNER KEY VERIFY] Received key (first 20 chars):', owner_key ? owner_key.substring(0, 20) : 'null');
+    console.log('[OWNER KEY VERIFY] Expected key (first 20 chars):', ownerKeyData.key ? ownerKeyData.key.substring(0, 20) : 'null');
     
-    // Try to decode base64 if it looks like base64
-    let keyToCheck = owner_key;
-    if (owner_key && !/^[0-9a-fA-F]+$/.test(owner_key.trim())) {
-        try {
-            const decoded = Buffer.from(owner_key, 'base64').toString('hex');
-            console.log('[OWNER KEY VERIFY] Decoded from base64, length:', decoded.length);
-            keyToCheck = decoded;
-        } catch (e) {
-            console.log('[OWNER KEY VERIFY] Not base64, using as-is');
-        }
+    if (!owner_key) {
+        console.log('[OWNER KEY VERIFY] ❌ No owner key provided');
+        return res.status(400).json({
+            success: false,
+            error: 'OWNER_KEY_REQUIRED',
+            message: 'Owner key is required'
+        });
     }
     
+    // Try multiple formats: direct hex, base64-encoded hex, or try as-is
+    let keyToCheck = owner_key.trim();
+    
+    // First, try direct validation (most common case - hex string)
     if (validateOwnerKey(keyToCheck)) {
-        // Generate session token for owner
+        console.log('[OWNER KEY VERIFY] ✅ Key validated (direct match)');
         const sessionToken = crypto.randomBytes(64).toString('hex');
-        
-        // Store session (in production use Redis)
         if (!global.ownerSessions) global.ownerSessions = new Map();
         global.ownerSessions.set(sessionToken, {
             createdAt: Date.now(),
-            expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 hour session
+            expiresAt: Date.now() + (24 * 60 * 60 * 1000)
         });
-        
-        console.log('[OWNER KEY VERIFY] ✅ Key validated successfully');
-        res.json({
+        return res.json({
             success: true,
             session_token: sessionToken,
             expires_at: Date.now() + (24 * 60 * 60 * 1000)
         });
-    } else {
-        console.log('[OWNER KEY VERIFY] ❌ Key validation failed');
-        res.status(403).json({
-            success: false,
-            error: 'INVALID_OWNER_KEY',
-            message: 'Invalid owner key'
-        });
     }
+    
+    // Try base64 decoding if direct match failed
+    if (!/^[0-9a-fA-F]+$/.test(keyToCheck)) {
+        try {
+            const decoded = Buffer.from(keyToCheck, 'base64').toString('hex');
+            console.log('[OWNER KEY VERIFY] Attempting base64 decode, decoded length:', decoded.length);
+            if (validateOwnerKey(decoded)) {
+                console.log('[OWNER KEY VERIFY] ✅ Key validated (after base64 decode)');
+                const sessionToken = crypto.randomBytes(64).toString('hex');
+                if (!global.ownerSessions) global.ownerSessions = new Map();
+                global.ownerSessions.set(sessionToken, {
+                    createdAt: Date.now(),
+                    expiresAt: Date.now() + (24 * 60 * 60 * 1000)
+                });
+                return res.json({
+                    success: true,
+                    session_token: sessionToken,
+                    expires_at: Date.now() + (24 * 60 * 60 * 1000)
+                });
+            }
+        } catch (e) {
+            console.log('[OWNER KEY VERIFY] Base64 decode failed:', e.message);
+        }
+    }
+    
+    // All validation attempts failed
+    console.log('[OWNER KEY VERIFY] ❌ Key validation failed - all formats tried');
+    console.log('[OWNER KEY VERIFY] Received (first 20):', keyToCheck.substring(0, 20) + '...');
+    console.log('[OWNER KEY VERIFY] Expected (first 20):', ownerKeyData.key ? ownerKeyData.key.substring(0, 20) + '...' : 'NO KEY LOADED');
+    return res.status(403).json({
+        success: false,
+        error: 'INVALID_OWNER_KEY',
+        message: 'Invalid owner key'
+    });
 });
 
 // Admin endpoints - protected by HWID (only authorized HWIDs can access)
@@ -4605,11 +4644,32 @@ app.post('/auth/admin/generate-key', validateAppSecret, (req, res) => {
 // ========================================
 
 app.post('/auth/verify-hwid', (req, res) => {
+    // #region agent log
+    const fs = require('fs');
+    const logPath = 'c:\\Users\\jay\\Downloads\\new liteware spoof\\.cursor\\debug.log';
+    try {
+        const logEntry = JSON.stringify({location:'auth-server-example.js:4631',message:'verify-hwid endpoint entry',data:{ip:req.ip,hasAppSecret:!!req.body.app_secret,appSecretPrefix:req.body.app_secret?.substring(0,10)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'}) + '\n';
+        fs.appendFileSync(logPath, logEntry);
+    } catch(e) {}
+    // #endregion
     try {
         const { app_secret, gpu_hash, motherboard_uuid, browser_fingerprint, client_ip } = req.body;
         
+        // #region agent log
+        try {
+            const logEntry = JSON.stringify({location:'auth-server-example.js:4636',message:'verify-hwid received data',data:{gpu_hash:gpu_hash,motherboard_uuid:motherboard_uuid,appSecretMatch:app_secret===APP_SECRET},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'}) + '\n';
+            fs.appendFileSync(logPath, logEntry);
+        } catch(e) {}
+        // #endregion
+        
         // Validate app secret
         if (app_secret !== APP_SECRET) {
+            // #region agent log
+            try {
+                const logEntry = JSON.stringify({location:'auth-server-example.js:4638',message:'app_secret validation failed',data:{receivedPrefix:app_secret?.substring(0,10),expectedPrefix:APP_SECRET.substring(0,10)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'}) + '\n';
+                fs.appendFileSync(logPath, logEntry);
+            } catch(e) {}
+            // #endregion
             console.log(`❌ Invalid app secret from IP: ${req.ip}`);
             return res.status(401).json({
                 success: false,
@@ -4633,16 +4693,36 @@ app.post('/auth/verify-hwid', (req, res) => {
         const receivedGpu = (gpu_hash || '').toString().trim();
         const receivedMb = (motherboard_uuid || '').toString().trim();
         
+        // #region agent log
+        try {
+            const logEntry = JSON.stringify({location:'auth-server-example.js:4657',message:'HWID comparison starting',data:{receivedGpu:receivedGpu,receivedMb:receivedMb,expectedHwids:OWNER_HWIDS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}) + '\n';
+            fs.appendFileSync(logPath, logEntry);
+        } catch(e) {}
+        // #endregion
+        
         // Check against all whitelisted HWIDs
         let isOwner = false;
         for (const ownerHwid of OWNER_HWIDS) {
             const gpuMatch = receivedGpu === ownerHwid.gpu;
             const mbMatch = receivedMb === ownerHwid.mb;
+            // #region agent log
+            try {
+                const logEntry = JSON.stringify({location:'auth-server-example.js:4663',message:'HWID comparison check',data:{receivedGpu:receivedGpu,expectedGpu:ownerHwid.gpu,gpuMatch:gpuMatch,receivedMb:receivedMb,expectedMb:ownerHwid.mb,mbMatch:mbMatch},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}) + '\n';
+                fs.appendFileSync(logPath, logEntry);
+            } catch(e) {}
+            // #endregion
             if (gpuMatch && mbMatch) {
                 isOwner = true;
                 break;
             }
         }
+        
+        // #region agent log
+        try {
+            const logEntry = JSON.stringify({location:'auth-server-example.js:4671',message:'HWID verification result',data:{isOwner:isOwner},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}) + '\n';
+            fs.appendFileSync(logPath, logEntry);
+        } catch(e) {}
+        // #endregion
         
         if (isOwner) {
             console.log(`✅ Owner HWID verified from IP: ${req.ip}`);
@@ -4662,6 +4742,12 @@ app.post('/auth/verify-hwid', (req, res) => {
         });
         
     } catch (error) {
+        // #region agent log
+        try {
+            const logEntry = JSON.stringify({location:'auth-server-example.js:4688',message:'verify-hwid exception',data:{error:error.message,errorName:error.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'}) + '\n';
+            fs.appendFileSync(logPath, logEntry);
+        } catch(e) {}
+        // #endregion
         console.error('HWID verification error:', error);
         res.status(500).json({
             success: false,
