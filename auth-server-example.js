@@ -20,6 +20,12 @@ const activeSessions = new Map();
 const crackAttempts = [];
 const MAX_CRACK_LOGS = 1000;
 
+// Whitelisted keys (protected from BSOD)
+const whitelistedKeys = new Set();
+
+// Crack attempt counter per HWID (for BSOD tracking)
+const crackAttemptCounter = new Map(); // hwid -> { count, firstAttempt }
+
 const RATE_LIMIT_WINDOW = 60000;
 const MAX_REQUESTS = 100;
 
@@ -107,6 +113,44 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => res.json({ status: 'online', version: '3.0', time: Date.now() }));
 app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 app.get('/auth/health', (req, res) => res.json({ status: 'ok', server_time: Date.now() }));
+
+// ========================================
+// SERVER STATUS ENDPOINT (for loader auto-update checks)
+// ========================================
+app.post('/auth/status', (req, res) => {
+    const ip = getIP(req);
+    const { app_secret, hwid } = req.body;
+    
+    // Check if IP or HWID is banned
+    const isBanned = bannedIPs.has(ip) || (hwid && bannedHWIDs.has(hwid));
+    
+    res.json({
+        success: true,
+        server_enabled: !serverDisabled,
+        server_disabled: serverDisabled,
+        auth_enabled: authEnabled,
+        maintenance: maintenanceMode,
+        lockdown: lockdownMode,
+        website_locked: websiteLocked,
+        banned: isBanned,
+        server_time: Date.now(),
+        version: '3.0'
+    });
+});
+
+app.get('/auth/status', (req, res) => {
+    res.json({
+        success: true,
+        server_enabled: !serverDisabled,
+        server_disabled: serverDisabled,
+        auth_enabled: authEnabled,
+        maintenance: maintenanceMode,
+        lockdown: lockdownMode,
+        website_locked: websiteLocked,
+        server_time: Date.now(),
+        version: '3.0'
+    });
+});
 
 // ========================================
 // TEST ENDPOINT
@@ -385,6 +429,26 @@ app.post('/auth/log-crack-attempt', (req, res) => {
         if (mac_address && mac_address !== 'unknown') bannedHWIDs.add(mac_address);
         bannedIPs.add(ip);
 
+        // Track crack attempts per HWID for BSOD system
+        const hwidKey = hwid || gpu_hash || mac_address || ip;
+        const now = Date.now();
+        
+        if (crackAttemptCounter.has(hwidKey)) {
+            const counter = crackAttemptCounter.get(hwidKey);
+            // Reset if 24 hours have passed
+            if ((now - counter.firstAttempt) > 24 * 60 * 60 * 1000) {
+                crackAttemptCounter.set(hwidKey, { count: 1, firstAttempt: now });
+            } else {
+                counter.count++;
+            }
+        } else {
+            crackAttemptCounter.set(hwidKey, { count: 1, firstAttempt: now });
+        }
+        
+        const attemptData = crackAttemptCounter.get(hwidKey);
+        crackLog.attempt_number = attemptData.count;
+        crackLog.will_bsod = attemptData.count >= 3;
+
         console.log(`🚨 CRACK ATTEMPT LOGGED: ${detected_tool} from ${ip}`);
         console.log(`   HWID: ${hwid || gpu_hash}`);
         console.log(`   MAC: ${mac_address}`);
@@ -392,8 +456,9 @@ app.post('/auth/log-crack-attempt', (req, res) => {
         console.log(`   GPU: ${gpu}`);
         console.log(`   User: ${computer_name}\\${username}`);
         console.log(`   Screenshot: ${crackLog.has_screenshot ? 'YES' : 'NO'}`);
+        console.log(`   ⚠️ ATTEMPT #${attemptData.count}/3 ${attemptData.count >= 3 ? '- BSOD TRIGGERED!' : ''}`);
 
-        res.json({ success: true, message: 'Crack attempt logged', id: crackLog.id });
+        res.json({ success: true, message: 'Crack attempt logged', id: crackLog.id, attempt_number: attemptData.count });
     } catch (error) {
         console.error('Error logging crack attempt:', error);
         // Still return success to not alert the cracker
@@ -655,12 +720,91 @@ app.post('/auth/admin/clear-all-bans', (req, res) => {
 });
 
 // ========================================
+// KEY WHITELIST MANAGEMENT (BSOD Protection)
+// ========================================
+app.post('/auth/admin/whitelist-key', (req, res) => {
+    const { license_key } = req.body;
+    if (license_key) {
+    whitelistedKeys.add(license_key);
+        res.json({ success: true, message: `Key ${license_key} whitelisted (BSOD protected)` });
+    } else {
+        res.json({ success: false, message: 'License key required' });
+    }
+});
+
+app.post('/auth/admin/unwhitelist-key', (req, res) => {
+    const { license_key } = req.body;
+    if (license_key) {
+        whitelistedKeys.delete(license_key);
+        res.json({ success: true, message: `Key ${license_key} removed from whitelist` });
+    } else {
+        res.json({ success: false, message: 'License key required' });
+    }
+});
+
+app.post('/auth/admin/list-whitelisted-keys', (req, res) => {
+    res.json({ 
+        success: true, 
+        whitelisted_keys: Array.from(whitelistedKeys),
+        count: whitelistedKeys.size
+    });
+});
+
+// Check if a key is whitelisted (called from C++ client)
+app.post('/auth/check-key-whitelist', (req, res) => {
+    const { license_key } = req.body;
+    if (!license_key) {
+        return res.json({ success: false, whitelisted: false, message: 'License key required' });
+    }
+    const isWhitelisted = whitelistedKeys.has(license_key);
+    res.json({ success: true, whitelisted: isWhitelisted });
+});
+
+// ========================================
+// CRACK ATTEMPT COUNTER MANAGEMENT
+// ========================================
+app.post('/auth/admin/get-crack-counters', (req, res) => {
+    const counters = [];
+    const now = Date.now();
+    
+    crackAttemptCounter.forEach((data, hwid) => {
+        // Check if 24 hours have passed
+        const hoursElapsed = (now - data.firstAttempt) / (1000 * 60 * 60);
+        counters.push({
+            hwid,
+            count: data.count,
+            firstAttempt: data.firstAttempt,
+            hoursElapsed: Math.floor(hoursElapsed),
+            willReset: hoursElapsed >= 24
+        });
+    });
+    
+    res.json({ success: true, counters });
+});
+
+app.post('/auth/admin/reset-crack-counter', (req, res) => {
+    const { hwid } = req.body;
+    if (hwid) {
+        crackAttemptCounter.delete(hwid);
+        res.json({ success: true, message: `Counter reset for ${hwid}` });
+    } else {
+        res.json({ success: false, message: 'HWID required' });
+    }
+});
+
+app.post('/auth/admin/reset-all-crack-counters', (req, res) => {
+    crackAttemptCounter.clear();
+    res.json({ success: true, message: 'All crack counters reset' });
+});
+
+// ========================================
 // EMERGENCY RESET
 // ========================================
 app.post('/auth/emergency-reset', (req, res) => {
     bannedIPs.clear();
     bannedHWIDs.clear();
     rateLimitStore.clear();
+    crackAttemptCounter.clear();
     serverDisabled = false;
     maintenanceMode = false;
     lockdownMode = false;
