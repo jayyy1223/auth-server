@@ -4538,31 +4538,38 @@ app.post('/auth/admin/generate-key', validateAppSecret, (req, res) => {
 
 app.post('/auth/verify-hwid', (req, res) => {
     try {
-        const { app_secret, gpu_hash, motherboard_uuid, browser_fingerprint } = req.body;
+        const { app_secret, gpu_hash, motherboard_uuid, browser_fingerprint, client_ip } = req.body;
         
         // Validate app secret
         if (app_secret !== APP_SECRET) {
+            console.log(`❌ Invalid app secret from IP: ${req.ip}`);
             return res.status(401).json({
                 success: false,
                 message: 'Invalid app secret'
             });
         }
         
-        // Owner HWID check (from your serial dump)
+        // Owner HWID check (from your serial dump) - BOTH must match
         const OWNER_GPU = 'GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
         const OWNER_MB_UUID = '04030201-98D8-3DEE-D3B4-E027A7EDF6EE';
         
-        const isOwner = gpu_hash === OWNER_GPU || motherboard_uuid === OWNER_MB_UUID;
+        // STRICT CHECK: Both GPU and MB UUID must match exactly (case-sensitive)
+        const gpuMatch = gpu_hash === OWNER_GPU;
+        const mbMatch = motherboard_uuid === OWNER_MB_UUID;
+        const isOwner = gpuMatch && mbMatch;  // Changed from OR to AND
         
         if (isOwner) {
-            console.log('✅ Owner HWID verified');
+            console.log(`✅ Owner HWID verified from IP: ${req.ip}`);
         } else {
-            console.log(`⚠️ HWID verification failed. GPU: ${gpu_hash}, MB: ${motherboard_uuid}`);
+            console.log(`🚫 HWID verification FAILED from IP: ${req.ip}`);
+            console.log(`   Received GPU: ${gpu_hash || 'MISSING'}, Expected: ${OWNER_GPU}`);
+            console.log(`   Received MB: ${motherboard_uuid || 'MISSING'}, Expected: ${OWNER_MB_UUID}`);
+            console.log(`   GPU Match: ${gpuMatch}, MB Match: ${mbMatch}`);
         }
         
         res.json({
             success: isOwner,
-            message: isOwner ? 'HWID verified' : 'HWID mismatch'
+            message: isOwner ? 'HWID verified' : 'HWID mismatch - Access denied'
         });
         
     } catch (error) {
