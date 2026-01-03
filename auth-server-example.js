@@ -425,6 +425,21 @@ function createSignedFailure(message, extraFields = {}, clientChallenge = null) 
     return signResponse(responseData, challenge);
 }
 
+// ========================================
+// HEALTH CHECK - BEFORE RATE LIMITING
+// ========================================
+app.get('/', (req, res) => {
+    res.json({ 
+        status: 'online', 
+        server: 'Liteware Auth Server v3.0',
+        time: new Date().toISOString()
+    });
+});
+
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', uptime: Date.now() - serverStartTime });
+});
+
 // Apply advanced rate limiting to all routes
 app.use(advancedRateLimit);
 
