@@ -1713,7 +1713,24 @@ app.post('/auth/validate-owner-key', (req, res) => {
 app.post('/auth/verify-owner-key', (req, res) => {
     const { owner_key } = req.body;
     
-    if (validateOwnerKey(owner_key)) {
+    console.log('[OWNER KEY VERIFY] Received key length:', owner_key ? owner_key.length : 0);
+    console.log('[OWNER KEY VERIFY] Expected key length:', ownerKeyData.key ? ownerKeyData.key.length : 0);
+    console.log('[OWNER KEY VERIFY] Received key (first 10 chars):', owner_key ? owner_key.substring(0, 10) : 'null');
+    console.log('[OWNER KEY VERIFY] Expected key (first 10 chars):', ownerKeyData.key ? ownerKeyData.key.substring(0, 10) : 'null');
+    
+    // Try to decode base64 if it looks like base64
+    let keyToCheck = owner_key;
+    if (owner_key && !/^[0-9a-fA-F]+$/.test(owner_key.trim())) {
+        try {
+            const decoded = Buffer.from(owner_key, 'base64').toString('hex');
+            console.log('[OWNER KEY VERIFY] Decoded from base64, length:', decoded.length);
+            keyToCheck = decoded;
+        } catch (e) {
+            console.log('[OWNER KEY VERIFY] Not base64, using as-is');
+        }
+    }
+    
+    if (validateOwnerKey(keyToCheck)) {
         // Generate session token for owner
         const sessionToken = crypto.randomBytes(64).toString('hex');
         
@@ -1724,12 +1741,14 @@ app.post('/auth/verify-owner-key', (req, res) => {
             expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 hour session
         });
         
+        console.log('[OWNER KEY VERIFY] ✅ Key validated successfully');
         res.json({
             success: true,
             session_token: sessionToken,
             expires_at: Date.now() + (24 * 60 * 60 * 1000)
         });
     } else {
+        console.log('[OWNER KEY VERIFY] ❌ Key validation failed');
         res.status(403).json({
             success: false,
             error: 'INVALID_OWNER_KEY',
