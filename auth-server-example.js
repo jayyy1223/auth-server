@@ -602,12 +602,18 @@ app.post('/auth/admin/stats', (req, res) => {
 });
 
 app.post('/auth/admin/security-stats', (req, res) => {
+    // Count active licenses (activated and not expired)
+    const now = Date.now();
+    const activeCount = Object.values(licenses).filter(l => l.activated && l.valid && l.expires > now).length;
+    
     res.json({
         success: true,
         banned_ips: bannedIPs.size,
         banned_hwids: bannedHWIDs.size,
         whitelisted_ips: whitelistedIPs.size,
         active_sessions: activeSessions.size,
+        active_users: activeCount,
+        total_keys: Object.keys(licenses).length,
         rate_limited: rateLimitStore.size,
         crack_attempts: crackAttempts.length,
         crack_attempts_24h: crackAttempts.filter(a => a.timestamp > Date.now() - 24*60*60*1000).length
