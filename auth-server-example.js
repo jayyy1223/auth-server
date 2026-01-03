@@ -1,7 +1,9 @@
-// Liteware Authentication Server v3.0 - Complete
+// Liteware Authentication Server v3.0 - Complete with Crack Detection
 const express = require('express');
 const bodyParser = require('body-parser');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 
@@ -13,6 +15,10 @@ const rateLimitStore = new Map();
 const bannedIPs = new Set();
 const bannedHWIDs = new Set();
 const activeSessions = new Map();
+
+// Crack attempt logs storage
+const crackAttempts = [];
+const MAX_CRACK_LOGS = 1000;
 
 const RATE_LIMIT_WINDOW = 60000;
 const MAX_REQUESTS = 100;
@@ -50,7 +56,7 @@ const isWhitelisted = (ip) => {
     return whitelistedIPs.has(clean) || whitelistedIPs.has(clean.replace('::ffff:', ''));
 };
 
-const getIP = (req) => req.ip || req.connection?.remoteAddress || 'unknown';
+const getIP = (req) => req.ip || req.connection?.remoteAddress || req.headers['x-forwarded-for']?.split(',')[0] || 'unknown';
 const genToken = () => crypto.randomBytes(32).toString('hex');
 
 const sign = (data, challenge) => {
@@ -59,6 +65,10 @@ const sign = (data, challenge) => {
         .update(JSON.stringify(data) + '|' + (challenge || '') + '|' + ts)
         .digest('hex');
     return { ...data, _sig: sig, _ts: ts, _challenge: challenge || '' };
+};
+
+const generateLicenseKey = () => {
+    return `LITE-${crypto.randomBytes(2).toString('hex').toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
 };
 
 // ========================================
@@ -222,17 +232,16 @@ app.post('/auth/admin/rotate-owner-key', (req, res) => {
 });
 
 // ========================================
-// ADMIN: GENERATE KEY
+// ADMIN: GENERATE SINGLE KEY
 // ========================================
 app.post('/auth/admin/generate-key', (req, res) => {
     const { duration_days = 30, owner_key: reqOwnerKey } = req.body;
     
-    // Allow generation without owner key for admin panel, or verify if provided
     if (reqOwnerKey && reqOwnerKey !== ownerKey.key) {
         return res.json({ success: false, message: 'Invalid owner key' });
     }
     
-    const key = `LITE-${crypto.randomBytes(2).toString('hex').toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+    const key = generateLicenseKey();
     licenses[key] = {
         valid: true,
         hwid: null,
@@ -243,6 +252,43 @@ app.post('/auth/admin/generate-key', (req, res) => {
     
     console.log(`Generated key: ${key}`);
     res.json({ success: true, license_key: key, key: key, expires: licenses[key].expires });
+});
+
+// ========================================
+// ADMIN: BULK GENERATE KEYS
+// ========================================
+app.post('/auth/admin/bulk-generate-keys', (req, res) => {
+    const { count = 10, duration_days = 30, owner_key: reqOwnerKey } = req.body;
+    
+    if (reqOwnerKey && reqOwnerKey !== ownerKey.key) {
+        return res.json({ success: false, message: 'Invalid owner key' });
+    }
+    
+    const numKeys = Math.min(Math.max(parseInt(count) || 10, 1), 100); // 1-100 keys max
+    const generatedKeys = [];
+    
+    for (let i = 0; i < numKeys; i++) {
+        const key = generateLicenseKey();
+        licenses[key] = {
+            valid: true,
+            hwid: null,
+            activated: false,
+            created: Date.now(),
+            expires: Date.now() + (duration_days * 24 * 60 * 60 * 1000)
+        };
+        generatedKeys.push({
+            key: key,
+            expires: licenses[key].expires
+        });
+    }
+    
+    console.log(`Bulk generated ${generatedKeys.length} keys`);
+    res.json({ 
+        success: true, 
+        message: `Generated ${generatedKeys.length} keys`,
+        count: generatedKeys.length,
+        keys: generatedKeys 
+    });
 });
 
 // ========================================
@@ -274,6 +320,137 @@ app.post('/auth/admin/revoke-key', (req, res) => {
 });
 
 // ========================================
+// CRACK DETECTION LOGGING SYSTEM
+// ========================================
+
+// Log a crack attempt (called from C++ client)
+app.post('/auth/log-crack-attempt', (req, res) => {
+    try {
+        const ip = getIP(req);
+        const {
+            hwid,
+            gpu_hash,
+            motherboard_uuid,
+            detection_type,
+            detected_tool,
+            screenshot_base64,
+            system_info,
+            username,
+            computer_name,
+            windows_version,
+            timestamp
+        } = req.body;
+
+        const crackLog = {
+            id: crypto.randomBytes(8).toString('hex'),
+            timestamp: timestamp || Date.now(),
+            ip: ip,
+            hwid: hwid || gpu_hash || 'unknown',
+            motherboard_uuid: motherboard_uuid || 'unknown',
+            detection_type: detection_type || 'unknown',
+            detected_tool: detected_tool || 'unknown',
+            screenshot: screenshot_base64 ? screenshot_base64.substring(0, 100) + '...' : null,
+            has_screenshot: !!screenshot_base64,
+            system_info: system_info || {},
+            username: username || 'unknown',
+            computer_name: computer_name || 'unknown',
+            windows_version: windows_version || 'unknown'
+        };
+
+        // Store full screenshot separately if provided
+        if (screenshot_base64) {
+            crackLog.screenshot_full = screenshot_base64;
+        }
+
+        // Add to logs (keep last MAX_CRACK_LOGS)
+        crackAttempts.unshift(crackLog);
+        if (crackAttempts.length > MAX_CRACK_LOGS) {
+            crackAttempts.pop();
+        }
+
+        // Auto-ban the HWID and IP
+        if (hwid) bannedHWIDs.add(hwid);
+        if (gpu_hash) bannedHWIDs.add(gpu_hash);
+        bannedIPs.add(ip);
+
+        console.log(`🚨 CRACK ATTEMPT LOGGED: ${detected_tool} from ${ip} (HWID: ${hwid || gpu_hash})`);
+
+        res.json({ success: true, message: 'Crack attempt logged', id: crackLog.id });
+    } catch (error) {
+        console.error('Error logging crack attempt:', error);
+        // Still return success to not alert the cracker
+        res.json({ success: true, message: 'Logged' });
+    }
+});
+
+// Get crack attempts (admin)
+app.post('/auth/admin/get-crack-attempts', (req, res) => {
+    const { limit = 50, include_screenshots = false } = req.body;
+    
+    const logs = crackAttempts.slice(0, Math.min(limit, MAX_CRACK_LOGS)).map(log => {
+        const result = { ...log };
+        if (!include_screenshots) {
+            delete result.screenshot_full;
+        }
+        return result;
+    });
+    
+    res.json({ 
+        success: true, 
+        count: logs.length,
+        total: crackAttempts.length,
+        attempts: logs 
+    });
+});
+
+// Get single crack attempt with full screenshot
+app.post('/auth/admin/get-crack-attempt', (req, res) => {
+    const { id } = req.body;
+    const attempt = crackAttempts.find(a => a.id === id);
+    
+    if (attempt) {
+        res.json({ success: true, attempt });
+    } else {
+        res.json({ success: false, message: 'Attempt not found' });
+    }
+});
+
+// Clear crack logs
+app.post('/auth/admin/clear-crack-logs', (req, res) => {
+    crackAttempts.length = 0;
+    res.json({ success: true, message: 'Crack logs cleared' });
+});
+
+// Get crack stats
+app.post('/auth/admin/crack-stats', (req, res) => {
+    const last24h = crackAttempts.filter(a => a.timestamp > Date.now() - 24*60*60*1000).length;
+    const lastWeek = crackAttempts.filter(a => a.timestamp > Date.now() - 7*24*60*60*1000).length;
+    
+    // Group by detection type
+    const byType = {};
+    crackAttempts.forEach(a => {
+        byType[a.detection_type] = (byType[a.detection_type] || 0) + 1;
+    });
+    
+    // Group by tool
+    const byTool = {};
+    crackAttempts.forEach(a => {
+        byTool[a.detected_tool] = (byTool[a.detected_tool] || 0) + 1;
+    });
+    
+    res.json({
+        success: true,
+        total: crackAttempts.length,
+        last_24h: last24h,
+        last_week: lastWeek,
+        by_type: byType,
+        by_tool: byTool,
+        unique_ips: [...new Set(crackAttempts.map(a => a.ip))].length,
+        unique_hwids: [...new Set(crackAttempts.map(a => a.hwid))].length
+    });
+});
+
+// ========================================
 // ADMIN: STATUS & STATS
 // ========================================
 app.post('/auth/admin/status', (req, res) => {
@@ -288,6 +465,7 @@ app.post('/auth/admin/status', (req, res) => {
         total_licenses: Object.keys(licenses).length,
         banned_ips: bannedIPs.size,
         banned_hwids: bannedHWIDs.size,
+        crack_attempts: crackAttempts.length,
         uptime: process.uptime()
     });
 });
@@ -300,7 +478,8 @@ app.post('/auth/admin/stats', (req, res) => {
         active_sessions: activeSessions.size,
         banned_ips: bannedIPs.size,
         banned_hwids: bannedHWIDs.size,
-        whitelisted_ips: whitelistedIPs.size
+        whitelisted_ips: whitelistedIPs.size,
+        crack_attempts: crackAttempts.length
     });
 });
 
@@ -311,7 +490,9 @@ app.post('/auth/admin/security-stats', (req, res) => {
         banned_hwids: bannedHWIDs.size,
         whitelisted_ips: whitelistedIPs.size,
         active_sessions: activeSessions.size,
-        rate_limited: rateLimitStore.size
+        rate_limited: rateLimitStore.size,
+        crack_attempts: crackAttempts.length,
+        crack_attempts_24h: crackAttempts.filter(a => a.timestamp > Date.now() - 24*60*60*1000).length
     });
 });
 
