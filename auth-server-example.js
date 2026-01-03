@@ -2364,6 +2364,16 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
             return res.json({ success: false, message: 'License key is invalid' });
         }
         
+        // Check if key is activated (backward compatible - if field doesn't exist, treat as activated)
+        if (license.activated === false) {
+            console.log('❌ License key not activated');
+            return res.json({ 
+                success: false, 
+                message: 'License key requires activation. Please activate your key at the activation portal.',
+                requires_activation: true 
+            });
+        }
+        
         console.log('✅ License key found and valid');
         
         // Check HWID lock (use GPU hash if available, otherwise use HWID)
@@ -2616,13 +2626,17 @@ app.post('/auth/generate-key', validateAppSecret, (req, res) => {
         // Add to licenses object
         licenses[licenseKey] = {
             valid: true,
+            activated: false, // Key requires activation before use
             used: false,
             hwid: null,
             ip: null,
             expiry: expiry,
             system_info: null,
             first_used: null,
-            last_used: null
+            last_used: null,
+            activated_at: null,
+            activated_by: null,
+            activation_ip: null
         };
         
         // Format expiry for display
@@ -2668,11 +2682,14 @@ app.post('/auth/list-keys', validateAppSecret, (req, res) => {
         return {
             key: key,
             valid: license.valid,
+            activated: license.activated !== false, // Backward compatible
             used: license.used,
             status: status, // Add status field for dashboard
             hwid: license.hwid || null,
             ip: license.ip || null,
-            expiry: license.expiry // Return ISO string, client will format it
+            expiry: license.expiry, // Return ISO string, client will format it
+            activated_at: license.activated_at || null,
+            activation_ip: license.activation_ip || null
         };
     });
     
@@ -4322,16 +4339,34 @@ app.post('/auth/admin/search-user', validateAppSecret, (req, res) => {
 
 // List all keys
 app.post('/auth/admin/list-keys', validateAppSecret, (req, res) => {
-    const keys = Array.from(validLicenseKeys).map(key => {
-        const session = Array.from(activeSessions.values()).find(s => s.license === key);
+    const keysList = Object.keys(licenses).map(key => {
+        const license = licenses[key];
+        // Determine status based on used and valid fields
+        let status = 'Unknown';
+        if (license.valid && license.used) {
+            status = 'Active';
+        } else if (license.valid && !license.used) {
+            status = 'Valid';
+        } else if (!license.valid) {
+            status = 'Invalid';
+        }
         return {
-            key,
-            hwid: session?.hwid || null,
-            last_used: session?.lastActivity || null
+            key: key,
+            valid: license.valid,
+            activated: license.activated !== false, // Backward compatible - default to true if field doesn't exist
+            used: license.used,
+            status: status,
+            hwid: license.hwid || null,
+            ip: license.ip || null,
+            expiry: license.expiry,
+            activated_at: license.activated_at || null,
+            activation_ip: license.activation_ip || null,
+            first_used: license.first_used || null,
+            last_used: license.last_used || null
         };
     });
     
-    res.json({ success: true, keys, count: keys.length });
+    res.json({ success: true, keys: keysList, count: keysList.length });
 });
 
 // Revoke key
@@ -4539,6 +4574,74 @@ app.post('/auth/verify-hwid', (req, res) => {
     }
 });
 
+// ========================================
+// KEY ACTIVATION ENDPOINT
+// ========================================
+app.post('/auth/activate-key', (req, res) => {
+    try {
+        const { license_key } = req.body;
+        
+        if (!license_key) {
+            return res.status(400).json({
+                success: false,
+                message: 'License key is required'
+            });
+        }
+        
+        const license = licenses[license_key];
+        
+        if (!license) {
+            return res.status(404).json({
+                success: false,
+                message: 'License key not found'
+            });
+        }
+        
+        if (!license.valid) {
+            return res.status(400).json({
+                success: false,
+                message: 'License key is invalid'
+            });
+        }
+        
+        if (license.activated) {
+            return res.json({
+                success: true,
+                message: 'License key is already activated',
+                activated: true,
+                activated_at: license.activated_at
+            });
+        }
+        
+        // Get client IP
+        const clientIP = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        const cleanIP = clientIP ? clientIP.split(',')[0].trim() : 'unknown';
+        
+        // Activate the key
+        license.activated = true;
+        license.activated_at = new Date().toISOString();
+        license.activation_ip = cleanIP;
+        
+        console.log(`✅ License key activated: ${license_key.substring(0, 12)}...`);
+        console.log(`   Activation IP: ${cleanIP}`);
+        console.log(`   Activation time: ${license.activated_at}`);
+        
+        res.json({
+            success: true,
+            message: 'License key activated successfully',
+            license_key: license_key,
+            activated_at: license.activated_at
+        });
+        
+    } catch (error) {
+        console.error('Key activation error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Activation failed'
+        });
+    }
+});
+
 // Health check
 app.get('/', (req, res) => {
     res.json({ 
@@ -4550,7 +4653,8 @@ app.get('/', (req, res) => {
             'Enhanced License Validation',
             'Secure Heartbeat',
             'License Watermarking',
-            'HWID Verification'
+            'HWID Verification',
+            'Key Activation System'
         ]
     });
 });
