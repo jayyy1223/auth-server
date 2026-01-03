@@ -183,7 +183,8 @@ function verifyRequestIntegrity(req) {
 // Advanced rate limiting with behavior analysis
 function advancedRateLimit(req, res, next) {
     // Skip rate limiting for admin endpoints (they use validateAppSecret)
-    if (req.path && req.path.startsWith('/auth/admin/')) {
+    const path = req.path || req.url || '';
+    if (path.includes('/auth/admin/') || path.startsWith('/auth/admin/')) {
         return next();
     }
     
