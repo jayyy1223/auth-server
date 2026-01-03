@@ -1,0 +1,19 @@
+{
+  "api_endpoint": "https://auth-server-production-b9fe.up.railway.app/auth",
+  "app_secret": "ABCJDWQ91D9219D21JKWDDKQAD912Q",
+  "app_name": "Liteware",
+  "app_version": "1.0",
+  "smart_fetch": {
+    "enabled": true,
+    "endpoints": [
+      "http://localhost:3000/auth",
+      "https://auth-server-production-b9fe.up.railway.app/auth"
+    ],
+    "timeout_ms": 8000,
+    "retries": 2,
+    "retry_delay_ms": 500,
+    "fallback_enabled": true,
+    "health_check_endpoint": "/auth/test"
+  }
+}
+
