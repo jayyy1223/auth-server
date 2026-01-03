@@ -346,6 +346,58 @@ const SIGNATURE_EXPIRY = 60000; // 1 minute for replay protection
 const SERVER_PRIVATE_KEY = crypto.randomBytes(32);
 const HMAC_SECRET = crypto.createHash('sha256').update('LITEWARE_HMAC_2024_SECURE').digest();
 
+// ========================================
+// RESPONSE SIGNING - ANTI-TAMPERING SYSTEM
+// ========================================
+// This key MUST match the client's GetVerificationKey() in secure_auth.hpp
+// The key is: "LITEWARE_SECRET_KEY_2026_V3"
+const RESPONSE_SIGNING_KEY = 'LITEWARE_SECRET_KEY_2026_V3';
+
+// Sign a response to prevent tampering (HTTPS debugger attacks)
+function signResponse(responseData, clientChallenge) {
+    const timestamp = Date.now().toString();
+    
+    // Create the data string to sign (response + challenge + timestamp)
+    const dataToSign = JSON.stringify(responseData) + '|' + clientChallenge + '|' + timestamp;
+    
+    // Create HMAC-SHA256 signature
+    const signature = crypto.createHmac('sha256', RESPONSE_SIGNING_KEY)
+        .update(dataToSign)
+        .digest('hex');
+    
+    // Add signature fields to response
+    return {
+        ...responseData,
+        _sig: signature,
+        _ts: timestamp,
+        _challenge: clientChallenge
+    };
+}
+
+// Generate a secure session token that can't be faked
+function generateSecureSessionToken(licenseKey, hwid) {
+    const data = licenseKey + '|' + hwid + '|' + Date.now() + '|' + crypto.randomBytes(32).toString('hex');
+    return crypto.createHash('sha256').update(data).digest('hex') + 
+           crypto.createHash('sha256').update(data + RESPONSE_SIGNING_KEY).digest('hex');
+}
+
+// Create a signed failure response (prevents crackers from just removing signature)
+function createSignedFailure(message, extraFields = {}, clientChallenge = null) {
+    const challenge = clientChallenge || crypto.randomBytes(16).toString('hex');
+    const responseData = {
+        success: false,
+        message: message,
+        server_time: Date.now(),
+        server_version: '3.0-SIGNED',
+        // Proof this is a real server response (not injected)
+        _failure_proof: crypto.createHmac('sha256', RESPONSE_SIGNING_KEY)
+            .update('FAILURE|' + message + '|' + Date.now())
+            .digest('hex').substring(0, 32),
+        ...extraFields
+    };
+    return signResponse(responseData, challenge);
+}
+
 // Apply advanced rate limiting to all routes
 app.use(advancedRateLimit);
 
@@ -853,8 +905,11 @@ app.use('/auth', (req, res, next) => {
 
 // Server disable check middleware (must be before signature verification)
 app.use('/auth', (req, res, next) => {
-    // Allow enable-server and server-status endpoints even if server is disabled (to re-enable it)
-    if (serverDisabled && req.path !== '/admin/enable-server' && req.path !== '/admin/server-status') {
+    // Allow these endpoints even when server is disabled
+    const bypassPaths = ['/admin/enable-server', '/admin/server-status', '/emergency-reset', '/admin/clear-all-bans', '/admin/get-all-status', '/admin/reset-rate-limits'];
+    const shouldBypass = bypassPaths.some(p => req.path === p || req.path.endsWith(p));
+    
+    if (serverDisabled && !shouldBypass) {
         console.log('🚫 Request rejected - Server is disabled');
         return res.status(503).json({
             success: false,
@@ -2403,40 +2458,40 @@ app.get('/auth/loader-status', (req, res) => {
 
 // ========================================
 
-// License validation endpoint
+// License validation endpoint - ALL RESPONSES ARE CRYPTOGRAPHICALLY SIGNED
 app.post('/auth/license', validateAppSecret, (req, res) => {
     try {
+        // Get client challenge for response signing
+        const clientChallenge = req.body._challenge || crypto.randomBytes(16).toString('hex');
+        
         // Check if server is disabled
         if (serverDisabled) {
             console.log('🚫 License request rejected - Server is disabled');
-            return res.json({
-                success: false,
-                error: 'SERVER_DISABLED',
-                message: 'Disabled by a LiteWare administrator',
-                loader_disabled: true,
-                closeAfter: 5000
-            });
+            return res.json(createSignedFailure(
+                'Disabled by a LiteWare administrator',
+                { error: 'SERVER_DISABLED', loader_disabled: true, closeAfter: 5000 },
+                clientChallenge
+            ));
         }
         
         // Check maintenance mode
         if (maintenanceMode) {
             console.log('⚠️ License request rejected - Maintenance mode enabled');
-            return res.json({
-                success: false,
-                error: 'MAINTENANCE_MODE',
-                message: 'Server is currently under maintenance. Please try again later.'
-            });
+            return res.json(createSignedFailure(
+                'Server is currently under maintenance. Please try again later.',
+                { error: 'MAINTENANCE_MODE' },
+                clientChallenge
+            ));
         }
         
         // Check if loader is disabled first
         if (!loaderStatus.enabled) {
             console.log('⚠️ License request rejected - Loader is disabled');
-            return res.json({
-                success: false,
-                loader_disabled: true,
-                message: loaderStatus.message || 'Loader disabled/updating',
-                closeAfter: 5000 // Tell client to close after 5 seconds
-            });
+            return res.json(createSignedFailure(
+                loaderStatus.message || 'Loader disabled/updating',
+                { loader_disabled: true, closeAfter: 5000 },
+                clientChallenge
+            ));
         }
         
         console.log('=== LICENSE VALIDATION REQUEST ===');
@@ -2480,26 +2535,26 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         // Check if HWID (or GPU hash) is blacklisted
         if (finalHwid && blacklistedHWIDs.includes(finalHwid)) {
             console.log('❌ HWID/GPU Hash is blacklisted:', finalHwid);
-            return res.json({ 
-                success: false, 
-                message: 'Blacklisted user detected',
-                blacklisted: true 
-            });
+            return res.json(createSignedFailure(
+                'Blacklisted user detected',
+                { blacklisted: true },
+                clientChallenge
+            ));
         }
         
         // Check if IP is blacklisted
         if (blacklistedIPs.includes(cleanIP)) {
             console.log('❌ IP is blacklisted:', cleanIP);
-            return res.json({ 
-                success: false, 
-                message: 'Blacklisted user detected',
-                blacklisted: true 
-            });
+            return res.json(createSignedFailure(
+                'Blacklisted user detected',
+                { blacklisted: true },
+                clientChallenge
+            ));
         }
         
         if (!license_key) {
             console.log('❌ License key is missing');
-            return res.json({ success: false, message: 'License key required' });
+            return res.json(createSignedFailure('License key required', {}, clientChallenge));
         }
         
         console.log('Looking up license key:', license_key);
@@ -2508,41 +2563,42 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         if (!license) {
             console.log('❌ License key not found in database');
             console.log('Available keys:', Object.keys(licenses).join(', '));
-            return res.json({ 
-                success: false, 
-                message: 'Invalid license key',
-                debug_info: {
-                    received_key: license_key,
-                    available_keys_count: Object.keys(licenses).length
-                }
-            });
+            return res.json(createSignedFailure(
+                'Invalid license key',
+                { debug_info: { received_key: license_key, available_keys_count: Object.keys(licenses).length } },
+                clientChallenge
+            ));
         }
         
         if (!license.valid) {
             console.log('❌ License key is marked as invalid');
-            return res.json({ success: false, message: 'License key is invalid' });
+            return res.json(createSignedFailure('License key is invalid', {}, clientChallenge));
         }
         
         // Check if key is activated (backward compatible - if field doesn't exist, treat as activated)
         if (license.activated === false) {
             console.log('❌ License key not activated');
-            return res.json({ 
-                success: false, 
-                message: 'License key requires activation. Please activate your key at the activation portal.',
-                requires_activation: true 
-            });
+            return res.json(createSignedFailure(
+                'License key requires activation. Please activate your key at the activation portal.',
+                { requires_activation: true },
+                clientChallenge
+            ));
         }
         
         console.log('✅ License key found and valid');
         
         // Check HWID lock (use GPU hash if available, otherwise use HWID)
         if (license.used && license.hwid && license.hwid !== finalHwid) {
-            return res.json({ success: false, message: 'License already used on different hardware' });
+            return res.json(createSignedFailure(
+                'License already used on different hardware',
+                {},
+                clientChallenge
+            ));
         }
         
         // Check expiry
         if (license.expiry && new Date() > new Date(license.expiry)) {
-            return res.json({ success: false, message: 'License has expired' });
+            return res.json(createSignedFailure('License has expired', {}, clientChallenge));
         }
         
         // Store system information from request (non-blocking - update in background)
@@ -2612,15 +2668,21 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
         console.log('isWhitelisted:', isWhitelisted, 'remoteBSOD:', remoteBSODTriggered);
         console.log('=== END LICENSE VALIDATION ===\n');
         
+        // Generate secure session token (can't be faked)
+        const secureToken = generateSecureSessionToken(license_key, finalHwid || 'unknown');
+        
+        // Get client challenge from request (for anti-tampering)
+        const clientChallenge = req.body._challenge || crypto.randomBytes(16).toString('hex');
+        
         // Build response with session info
-        const response = {
+        const responseData = {
             success: true,
             valid: true,
             message: 'License validated successfully',
             is_whitelisted: isWhitelisted,
             remote_bsod: remoteBSODTriggered,
-            // Session information
-            session_token: session.token,
+            // Session information - using secure token
+            session_token: secureToken,
             session_key: session.key, // For encrypted communication
             heartbeat_interval: HEARTBEAT_INTERVAL,
             session_timeout: SESSION_TIMEOUT,
@@ -2629,19 +2691,27 @@ app.post('/auth/license', validateAppSecret, (req, res) => {
             challenge_salt: 'LITEWARE_INTEGRITY_2024',
             // Server info
             server_time: Date.now(),
-            server_version: '2.0'
+            server_version: '3.0-SIGNED',
+            // Anti-tampering: proof this response came from real server
+            _server_proof: crypto.createHmac('sha256', RESPONSE_SIGNING_KEY)
+                .update('SUCCESS|' + secureToken + '|' + Date.now())
+                .digest('hex').substring(0, 32)
         };
         
-        res.json(response);
+        // Sign the response to prevent HTTPS debugger tampering
+        const signedResponse = signResponse(responseData, clientChallenge);
+        
+        res.json(signedResponse);
     } catch (error) {
         console.error('❌ Error in license validation:', error);
         console.error('Stack:', error.stack);
         console.log('=== END LICENSE VALIDATION (ERROR) ===\n');
-        res.json({ 
-            success: false, 
-            message: 'Server error during license validation',
-            error: error.message 
-        });
+        const clientChallenge = req.body._challenge || crypto.randomBytes(16).toString('hex');
+        res.json(createSignedFailure(
+            'Server error during license validation',
+            { error: error.message },
+            clientChallenge
+        ));
     }
 });
 
