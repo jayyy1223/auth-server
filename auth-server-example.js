@@ -182,6 +182,11 @@ function verifyRequestIntegrity(req) {
 
 // Advanced rate limiting with behavior analysis
 function advancedRateLimit(req, res, next) {
+    // Skip rate limiting for admin endpoints (they use validateAppSecret)
+    if (req.path && req.path.startsWith('/auth/admin/')) {
+        return next();
+    }
+    
     const ip = req.ip || req.connection.remoteAddress;
     
     // Check if IP is banned
