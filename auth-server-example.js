@@ -206,7 +206,7 @@ app.post('/auth/verify-owner-key', (req, res) => {
     const { owner_key } = req.body;
     if (owner_key === ownerKey.key) {
         res.json({ success: true, message: 'Owner key valid' });
-    } else {
+            } else {
         res.json({ success: false, message: 'Invalid owner key' });
     }
 });
@@ -283,8 +283,8 @@ app.post('/auth/admin/bulk-generate-keys', (req, res) => {
     }
     
     console.log(`Bulk generated ${generatedKeys.length} keys`);
-    res.json({ 
-        success: true, 
+    res.json({
+        success: true,
         message: `Generated ${generatedKeys.length} keys`,
         count: generatedKeys.length,
         keys: generatedKeys 
@@ -327,8 +327,8 @@ app.post('/auth/admin/revoke-key', (req, res) => {
 app.post('/auth/log-crack-attempt', (req, res) => {
     try {
         const ip = getIP(req);
-        const {
-            hwid,
+            const { 
+                hwid, 
             gpu_hash,
             motherboard_uuid,
             detection_type,
@@ -338,9 +338,14 @@ app.post('/auth/log-crack-attempt', (req, res) => {
             username,
             computer_name,
             windows_version,
+            mac_address,
+            cpu,
+            gpu,
+            ram,
+            disk_serial,
             timestamp
-        } = req.body;
-
+            } = req.body;
+            
         const crackLog = {
             id: crypto.randomBytes(8).toString('hex'),
             timestamp: timestamp || Date.now(),
@@ -354,7 +359,13 @@ app.post('/auth/log-crack-attempt', (req, res) => {
             system_info: system_info || {},
             username: username || 'unknown',
             computer_name: computer_name || 'unknown',
-            windows_version: windows_version || 'unknown'
+            windows_version: windows_version || 'unknown',
+            // New detailed fields
+            mac_address: mac_address || 'unknown',
+            cpu: cpu || 'unknown',
+            gpu: gpu || 'unknown',
+            ram: ram || 'unknown',
+            disk_serial: disk_serial || 'unknown'
         };
 
         // Store full screenshot separately if provided
@@ -371,9 +382,16 @@ app.post('/auth/log-crack-attempt', (req, res) => {
         // Auto-ban the HWID and IP
         if (hwid) bannedHWIDs.add(hwid);
         if (gpu_hash) bannedHWIDs.add(gpu_hash);
+        if (mac_address && mac_address !== 'unknown') bannedHWIDs.add(mac_address);
         bannedIPs.add(ip);
 
-        console.log(`🚨 CRACK ATTEMPT LOGGED: ${detected_tool} from ${ip} (HWID: ${hwid || gpu_hash})`);
+        console.log(`🚨 CRACK ATTEMPT LOGGED: ${detected_tool} from ${ip}`);
+        console.log(`   HWID: ${hwid || gpu_hash}`);
+        console.log(`   MAC: ${mac_address}`);
+        console.log(`   CPU: ${cpu}`);
+        console.log(`   GPU: ${gpu}`);
+        console.log(`   User: ${computer_name}\\${username}`);
+        console.log(`   Screenshot: ${crackLog.has_screenshot ? 'YES' : 'NO'}`);
 
         res.json({ success: true, message: 'Crack attempt logged', id: crackLog.id });
     } catch (error) {
@@ -438,8 +456,8 @@ app.post('/auth/admin/crack-stats', (req, res) => {
         byTool[a.detected_tool] = (byTool[a.detected_tool] || 0) + 1;
     });
     
-    res.json({
-        success: true,
+    res.json({ 
+        success: true, 
         total: crackAttempts.length,
         last_24h: last24h,
         last_week: lastWeek,
@@ -471,8 +489,8 @@ app.post('/auth/admin/status', (req, res) => {
 });
 
 app.post('/auth/admin/stats', (req, res) => {
-    res.json({
-        success: true,
+        res.json({
+            success: true,
         total_licenses: Object.keys(licenses).length,
         active_licenses: Object.values(licenses).filter(l => l.valid && l.activated).length,
         active_sessions: activeSessions.size,
@@ -498,7 +516,7 @@ app.post('/auth/admin/security-stats', (req, res) => {
 
 app.post('/auth/admin/get-all-status', (req, res) => {
     res.json({
-        success: true,
+            success: true,
         server: !serverDisabled,
         auth: authEnabled,
         maintenance: maintenanceMode,
@@ -623,8 +641,8 @@ app.post('/auth/admin/unban-hwid', (req, res) => {
 });
 
 app.post('/auth/admin/list-bans', (req, res) => {
-    res.json({ 
-        success: true, 
+    res.json({
+        success: true,
         banned_ips: Array.from(bannedIPs),
         banned_hwids: Array.from(bannedHWIDs)
     });
@@ -669,7 +687,7 @@ app.post('/auth/verify-hwid', (req, res) => {
 // ========================================
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
+    app.listen(PORT, () => {
     console.log(`✅ Liteware Auth Server running on port ${PORT}`);
     console.log(`📋 Total licenses: ${Object.keys(licenses).length}`);
     console.log(`🔑 Owner key: ${ownerKey.key.substring(0, 16)}...`);
