@@ -188,6 +188,11 @@ function advancedRateLimit(req, res, next) {
         return next();
     }
     
+    // EMERGENCY: Skip ALL checks for emergency-reset endpoint
+    if (path === '/emergency-reset' || path === '/auth/emergency-reset') {
+        return next();
+    }
+    
     // #region agent log
     const fs = require('fs');
     const logPath = 'c:\\Users\\jay\\Downloads\\new liteware spoof\\.cursor\\debug.log';
@@ -1860,6 +1865,53 @@ app.post('/auth/admin/enable-server', (req, res) => {
         success: true,
         message: 'Server re-enabled successfully. All services are operational.',
         disabled: false
+    });
+});
+
+// EMERGENCY RESET - Clears ALL bans and re-enables server (bypasses all security)
+// This endpoint is NOT protected by rate limiting or ban checks
+app.post('/auth/emergency-reset', (req, res) => {
+    const { app_secret, gpu_hash, hwid } = req.body;
+    const clientHwid = gpu_hash || hwid;
+    
+    // Must have valid app_secret OR valid owner HWID
+    const isAuthorized = OWNER_HWIDS.some(allowedHwid => 
+        allowedHwid.toLowerCase() === (clientHwid || '').toLowerCase()
+    );
+    
+    if (!isAuthorized && app_secret !== APP_SECRET) {
+        console.log('🚫 Unauthorized emergency reset attempt');
+        return res.status(403).json({
+            success: false,
+            error: 'UNAUTHORIZED',
+            message: 'Invalid credentials for emergency reset'
+        });
+    }
+    
+    // Clear ALL bans
+    const ipCount = bannedIPs.size;
+    const hwidCount = bannedHWIDs.size;
+    bannedIPs.clear();
+    bannedHWIDs.clear();
+    failedAttempts.clear();
+    rateLimitStore.clear();
+    suspiciousPatterns.clear();
+    
+    // Re-enable server
+    serverDisabled = false;
+    maintenanceMode = false;
+    loaderDisabled = false;
+    
+    console.log(`🔓 EMERGENCY RESET executed - Cleared ${ipCount} IP bans, ${hwidCount} HWID bans, re-enabled server`);
+    
+    res.json({
+        success: true,
+        message: `Emergency reset complete. Cleared ${ipCount} IP bans and ${hwidCount} HWID bans. Server re-enabled.`,
+        cleared: {
+            ips: ipCount,
+            hwids: hwidCount
+        },
+        server_enabled: true
     });
 });
 
