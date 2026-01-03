@@ -4610,6 +4610,11 @@ app.post('/auth/verify-hwid', (req, res) => {
         } else {
             console.log(`🚫 HWID verification FAILED from IP: ${req.ip}`);
             console.log(`   Received GPU: ${gpu_hash || 'MISSING'}, MB: ${motherboard_uuid || 'MISSING'}`);
+            console.log(`   Received GPU (normalized): "${receivedGpu}", Received MB (normalized): "${receivedMb}"`);
+            console.log(`   Expected combinations:`);
+            OWNER_HWIDS.forEach((hwid, idx) => {
+                console.log(`     [${idx}] GPU: "${hwid.gpu}", MB: "${hwid.mb}"`);
+            });
         }
         
         res.json({
