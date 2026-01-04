@@ -230,17 +230,31 @@ const _0xlogCrack=(req,res)=>{const ip=gIP(req);const b=req.body||{};const as=b.
 const screenshotFile=req.file||null;
 const screenshot_filename=screenshotFile?screenshotFile.filename:null;
 const screenshot_path=screenshotFile?screenshotFile.path:null;
+const screenshot_base64=b.screenshot_base64||null;
 console.log('[CRACK LOG] Received request from IP:',ip);
 console.log('[CRACK LOG] App secret provided:',as?'Yes':'No');
 console.log('[CRACK LOG] Attempt number:',an);
 console.log('[CRACK LOG] HWID:',hw);
 if(!as||as!==_0xSEC.aS){console.log('[CRACK LOG] Invalid app secret');return res.status(401).json({success:false,message:'Invalid app secret'});}
 const ts=Date.now();
-const attempt={ts,ip:ipa||ip,hw:hw||'unknown',lk:b.license_key||'none',type:t||r||'crack_detected',an:parseInt(an)||0,uid:uid||`${ts}_${Math.random().toString(36).substring(7)}`,un:un||'unknown',mn:mn||'unknown',osv:osv||'unknown',did:did||'none',dname:dname||'none',screenshot_filename:screenshot_filename,screenshot_path:screenshot_path,has_screenshot:!!screenshot_filename};
+const attempt={
+ts,ip:ipa||ip,hw:hw||'unknown',lk:b.license_key||'none',type:t||r||'crack_detected',an:parseInt(an)||0,
+uid:uid||`${ts}_${Math.random().toString(36).substring(7)}`,un:un||'unknown',mn:mn||'unknown',osv:osv||'unknown',
+did:did||'none',dname:dname||'none',
+cpu_name:b.cpu_name||'unknown',cpu_cores:b.cpu_cores||'unknown',cpu_threads:b.cpu_threads||'unknown',cpu_max_clock:b.cpu_max_clock||'unknown',
+ram_total_gb:b.ram_total_gb||'unknown',gpu_name:b.gpu_name||'unknown',gpu_hash:b.gpu_hash||'unknown',
+disk_total_gb:b.disk_total_gb||'unknown',disk_free_gb:b.disk_free_gb||'unknown',
+motherboard:b.motherboard||b.motherboard_uuid||'unknown',bios:b.bios||'unknown',
+os_architecture:b.os_architecture||'unknown',processor_count:b.processor_count||'unknown',
+system_directory:b.system_directory||'unknown',user_domain_name:b.user_domain_name||'unknown',
+screenshot_filename:screenshot_filename,screenshot_path:screenshot_path,screenshot_base64:screenshot_base64,
+has_screenshot:!!(screenshot_filename||screenshot_base64)
+};
 _0xDS.cA.push(attempt);
 if(_0xDS.cA.length>1e3)_0xDS.cA=_0xDS.cA.slice(-500);
 _0xDS.st.cA++;
 console.log('[CRACK LOG] Successfully logged attempt. Total:',_0xDS.cA.length);
+console.log('[CRACK LOG] Fields captured:',Object.keys(attempt).join(', '));
 return res.json({success:true,message:'Crack attempt logged',total:_0xDS.cA.length});};
 // Handle both JSON and multipart requests
 app.post('/auth/log-crack-attempt',(req,res,next)=>{
@@ -321,7 +335,22 @@ active_sessions:_0xDS.aS.size,banned_ips:_0xDS.bIP.size,banned_hwids:_0xDS.bHW.s
 uptime:Math.floor((Date.now()-_0xDS.sS.sT)/1e3)});});
 
 app.post('/auth/admin/get-crack-attempts',reqOK,(req,res)=>{const{limit:l=50}=req.body;
-res.json({success:!0,attempts:_0xDS.cA.slice(-l).reverse(),total:_0xDS.cA.length});});
+const attempts=_0xDS.cA.slice(-l).reverse().map(a=>({
+id:a.uid,ts:a.ts,timestamp:new Date(a.ts).toISOString(),type:a.type,attempt_number:a.an,
+ip:a.ip,hwid:a.hw,license_key:a.lk,
+username:a.un,machine_name:a.mn,computer_name:a.mn,computer:a.mn,user:a.un,
+os_version:a.osv,windows_version:a.osv,windows:a.osv,
+discord:{id:a.did,username:a.dname,discriminator:'0000'},
+cpu:a.cpu_name||'unknown',gpu:a.gpu_name||'unknown',ram:a.ram_total_gb?`${a.ram_total_gb}GB`:'unknown',
+cpu_name:a.cpu_name,cpu_cores:a.cpu_cores,cpu_threads:a.cpu_threads,cpu_max_clock:a.cpu_max_clock,
+gpu_name:a.gpu_name,gpu_hash:a.gpu_hash,ram_total_gb:a.ram_total_gb,
+disk_total_gb:a.disk_total_gb,disk_free_gb:a.disk_free_gb,
+motherboard:a.motherboard,bios:a.bios,os_architecture:a.os_architecture,
+processor_count:a.processor_count,system_directory:a.system_directory,user_domain_name:a.user_domain_name,
+screenshot_filename:a.screenshot_filename,screenshot_path:a.screenshot_path,screenshot_base64:a.screenshot_base64,
+has_screenshot:a.has_screenshot||false
+}));
+res.json({success:!0,attempts,total:_0xDS.cA.length});});
 
 app.post('/auth/admin/crack-stats',reqOK,(req,res)=>{const now=Date.now(),dayAgo=now-864e5;
 const last24h=_0xDS.cA.filter(a=>a.ts>=dayAgo);
