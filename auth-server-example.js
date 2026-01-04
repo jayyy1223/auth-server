@@ -487,6 +487,10 @@ console.log('[STARTUP] Crack log endpoint registered at: /auth/log-crack-attempt
 console.log('[STARTUP] Multer available:',_0xmulter?'Yes':'No');
 console.log('[STARTUP] Body parser limit: 50MB');
 console.log('[STARTUP] Ready to receive crack logs!');
-console.log('='.repeat(50));});
+console.log('='.repeat(50));
+// #region agent log
+_0xdebugLog('auth-server-example.js:470','Server started and listening',{port:PORT,multerAvailable:!!_0xmulter},'M');
+// #endregion
+});
 
 module.exports=app;
