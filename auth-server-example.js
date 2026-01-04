@@ -245,10 +245,16 @@ return res.json({success:true,message:'Crack attempt logged',total:_0xDS.cA.leng
 // Handle both JSON and multipart requests
 app.post('/auth/log-crack-attempt',(req,res,next)=>{
 const ct=(req.headers['content-type']||'').toLowerCase();
+console.log('[CRACK LOG] POST request received, Content-Type:',ct);
 if(ct.includes('multipart')&&_0xmulter){
+console.log('[CRACK LOG] Using multer for multipart request');
 const _0xup=_0xmulter({limits:{fileSize:10*1024*1024}});
-return _0xup.single('screenshot')(req,res,next);
+return _0xup.single('screenshot')(req,res,(err)=>{
+if(err){console.error('[CRACK LOG] Multer error:',err);return res.status(500).json({success:false,message:'File upload failed',error:err.message});}
+next();
+});
 }
+console.log('[CRACK LOG] Using JSON body parser');
 next();
 },_0xlogCrack);
 
