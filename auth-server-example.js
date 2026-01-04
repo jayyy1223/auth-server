@@ -142,10 +142,20 @@ if(aS>=_0xCFG.aT){console.log(`[Anomaly] ${ip} (${aS})`);_0xDS.sIP.add(ip);}next
 app.use(bodyParser.urlencoded({extended:!0,limit:'50mb'}));
 app.use(bodyParser.json({limit:'50mb'}));
 
-// Debug: Log all incoming requests to /auth/log-crack-attempt
+// Debug: Log ALL incoming POST requests to see what's happening
 app.use((req,res,next)=>{
+if(req.method==='POST'){
+console.log('[DEBUG POST] ====== ALL POST REQUESTS ======');
+console.log('[DEBUG POST] Path:',req.path);
+console.log('[DEBUG POST] IP:',gIP(req));
+console.log('[DEBUG POST] Content-Type:',req.headers['content-type']||'none');
+console.log('[DEBUG POST] Content-Length:',req.headers['content-length']||'unknown');
+console.log('[DEBUG POST] User-Agent:',req.headers['user-agent']||'none');
+}
 if(req.path==='/auth/log-crack-attempt'||req.path==='/log-crack-attempt'){
-console.log('[DEBUG] Request to crack log endpoint:',req.method,req.path,req.headers['content-type']||'no content-type');
+console.log('[DEBUG] ====== CRACK LOG ENDPOINT HIT ======');
+console.log('[DEBUG] Method:',req.method);
+console.log('[DEBUG] Full URL:',req.originalUrl||req.url);
 }
 next();
 });
@@ -163,6 +173,17 @@ setTimeout(()=>res.status(404).json({error:'Not found'}),2e3+Math.random()*3e3);
 app.get('/',(req,res)=>res.json({status:'online',version:'5.0',time:Date.now(),uptime:Math.floor((Date.now()-_0xDS.sS.sT)/1e3)}));
 app.get('/health',(req,res)=>res.json({status:'ok',uptime:process.uptime(),memory:process.memoryUsage().heapUsed}));
 app.get('/auth/health',(req,res)=>res.json({status:'ok',server_time:Date.now(),auth_enabled:_0xDS.sS.aE}));
+
+// Test endpoint for crack logs - verify server is receiving requests
+app.get('/auth/log-crack-attempt',(req,res)=>{
+console.log('[TEST] GET request to crack log endpoint - server is working');
+res.json({success:true,message:'Crack log endpoint is accessible',method:'GET',note:'Use POST to send crack logs'});
+});
+
+app.get('/log-crack-attempt',(req,res)=>{
+console.log('[TEST] GET request to crack log endpoint (no /auth) - server is working');
+res.json({success:true,message:'Crack log endpoint is accessible',method:'GET',note:'Use POST to send crack logs'});
+});
 
 // Status
 app.all('/auth/status',(req,res)=>{const ip=gIP(req),hw=req.body?.hwid;
@@ -416,6 +437,11 @@ if(_0xDS.cA.length>1e3)_0xDS.cA=_0xDS.cA.slice(-500);
 // Start
 const PORT=process.env.PORT||3000;
 app.listen(PORT,()=>{console.log('='.repeat(50));console.log('LITEWARE AUTH v5.0');console.log('='.repeat(50));
-console.log(`Port: ${PORT}`);console.log(`Key: ${_0xDS.oK.k}`);console.log('='.repeat(50));});
+console.log(`Port: ${PORT}`);console.log(`Key: ${_0xDS.oK.k}`);console.log('='.repeat(50));
+console.log('[STARTUP] Crack log endpoint registered at: /auth/log-crack-attempt');
+console.log('[STARTUP] Multer available:',_0xmulter?'Yes':'No');
+console.log('[STARTUP] Body parser limit: 50MB');
+console.log('[STARTUP] Ready to receive crack logs!');
+console.log('='.repeat(50));});
 
 module.exports=app;
