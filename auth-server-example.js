@@ -22,7 +22,7 @@ iPE:!0,sC:[],eA:_0x2f3b('YWVzLTI1Ni1nY20='),kRI:864e5};})();
 // Obfuscated secrets - Use env vars in production!
 const _0xSEC=(()=>{
 const _e=process.env;
-const _k1=_0x2f3b('QUJDSURVUTU5MTlEMjE5RDIxSktXRERLUUFEOTEyUQ==');
+const _k1=_0x2f3b('QUJDSkRXUTkxRDkyMTlEMjFKS1dEREtRQUQ5MTJR');
 const _k2=_0x2f3b('TElURVdBUkVfU0VDUkVUX0tFWV8yMDI2X1Yz');
 return{
 aS:_e.AUTH_APP_SECRET||_k1,
