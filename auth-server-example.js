@@ -231,7 +231,8 @@ app.post('/auth/log-crack-attempt',_0xlogCrack);}
 
 // Admin middleware - ONLY ALLOWED HWID
 const reqOK=(req,res,next)=>{const{owner_key:ok,app_secret:as,hwid:hw}=req.body;
-if(as!==_0xSEC.aS||ok!==_0xDS.oK.k)return res.status(401).json({success:false,message:'Unauthorized',error_code:401});
+if(as!==_0xSEC.aS)return res.status(401).json({success:false,message:'Invalid app secret',error_code:401});
+if(ok!==_0xDS.oK.k)return res.status(401).json({success:false,message:'Invalid owner key',error_code:401});
 const ALLOWED_HWID='GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
 if(!hw)return res.status(403).json({success:false,message:'HWID required',error_code:403});
 if(hw!==ALLOWED_HWID)return res.status(403).json({success:false,message:'Access denied - HWID not authorized',error_code:403});
