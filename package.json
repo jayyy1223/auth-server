@@ -1,25 +1,25 @@
 {
-  "name": "liteware-auth-server",
-  "version": "3.0.0",
-  "description": "Liteware Advanced Authentication Server",
-  "main": "auth-server-example.js",
-  "scripts": {
-    "start": "node auth-server-example.js",
-    "dev": "node auth-server-example.js"
+  "api_endpoint": "https://auth-server-production-b9fe.up.railway.app/auth",
+  "app_name": "Liteware",
+  "app_version": "3.0",
+  "security": {
+    "signature_required": true,
+    "certificate_pinning": true,
+    "response_encryption": true,
+    "replay_protection": true,
+    "timing_checks": true
   },
-  "keywords": [
-    "authentication",
-    "license",
-    "server"
-],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "express": "^4.18.2",
-    "body-parser": "^1.20.2"
+  "protection": {
+    "anti_tampering": true,
+    "anti_debug": true,
+    "anti_dump": true,
+    "vm_detection": true,
+    "code_integrity": true
   },
-  "engines": {
-    "node": ">=14.0.0"
-  }
+  "rate_limits": {
+    "requests_per_minute": 60,
+    "requests_per_second": 10,
+    "burst_threshold": 5
+  },
+  "_note": "APP_SECRET should be stored securely, not in config file. Use environment variable AUTH_APP_SECRET"
 }
-
