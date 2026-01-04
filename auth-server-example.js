@@ -1,4 +1,15 @@
-// Liteware Authentication Server v3.0 - Complete with Crack Detection
+// Liteware Authentication Server v4.0 - MAXIMUM SECURITY
+// ========================================
+// FINAL SECURITY FEATURES:
+// - Request signing & verification
+// - Replay attack prevention
+// - IP fingerprinting
+// - Request integrity checks
+// - Encrypted responses
+// - Honeypot endpoints
+// - Behavioral analysis
+// - Geographic anomaly detection
+// ========================================
 const express = require('express');
 const bodyParser = require('body-parser');
 const crypto = require('crypto');
@@ -6,6 +17,166 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
+
+// ========================================
+// ADVANCED SECURITY CONFIGURATION
+// ========================================
+const securityConfig = {
+    // Request signing
+    signatureRequired: true,
+    signatureTimeout: 30000, // 30 seconds
+    
+    // Replay prevention
+    usedNonces: new Map(), // nonce -> timestamp
+    nonceCleanupInterval: 60000, // 1 minute
+    
+    // Request integrity
+    requiredHeaders: ['user-agent', 'content-type'],
+    blockedUserAgents: ['curl', 'wget', 'python-requests', 'postman', 'insomnia'],
+    
+    // Behavioral analysis
+    requestPatterns: new Map(), // ip -> pattern data
+    anomalyThreshold: 5,
+    
+    // Honeypot tracking
+    honeypotHits: new Map(),
+    
+    // Session security
+    sessionRotationInterval: 300000, // 5 minutes
+    maxSessionsPerHWID: 3,
+    
+    // Encryption
+    responseEncryption: false, // Enable if needed
+    encryptionKey: crypto.randomBytes(32)
+};
+
+// Nonce cleanup
+setInterval(() => {
+    const now = Date.now();
+    for (const [nonce, timestamp] of securityConfig.usedNonces) {
+        if (now - timestamp > 120000) { // 2 minutes
+            securityConfig.usedNonces.delete(nonce);
+        }
+    }
+}, securityConfig.nonceCleanupInterval);
+
+// ========================================
+// SECURITY HELPER FUNCTIONS
+// ========================================
+
+// Generate request signature
+function generateSignature(data, timestamp, nonce) {
+    const payload = JSON.stringify(data) + timestamp + nonce;
+    return crypto.createHmac('sha256', APP_SECRET).update(payload).digest('hex');
+}
+
+// Verify request signature
+function verifyRequestSignature(req) {
+    if (!securityConfig.signatureRequired) return true;
+    
+    const signature = req.headers['x-signature'];
+    const timestamp = req.headers['x-timestamp'];
+    const nonce = req.headers['x-nonce'];
+    
+    if (!signature || !timestamp || !nonce) return false;
+    
+    // Check timestamp freshness
+    const now = Date.now();
+    const reqTime = parseInt(timestamp);
+    if (Math.abs(now - reqTime) > securityConfig.signatureTimeout) return false;
+    
+    // Check nonce reuse (replay prevention)
+    if (securityConfig.usedNonces.has(nonce)) return false;
+    securityConfig.usedNonces.set(nonce, now);
+    
+    // Verify signature
+    const expectedSig = generateSignature(req.body, timestamp, nonce);
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig));
+}
+
+// Check for blocked user agents
+function isBlockedUserAgent(ua) {
+    if (!ua) return false;
+    const lowerUA = ua.toLowerCase();
+    return securityConfig.blockedUserAgents.some(blocked => lowerUA.includes(blocked));
+}
+
+// Analyze request patterns for anomalies
+function analyzeRequestPattern(ip, endpoint) {
+    if (!securityConfig.requestPatterns.has(ip)) {
+        securityConfig.requestPatterns.set(ip, {
+            endpoints: {},
+            lastRequest: Date.now(),
+            requestTimes: [],
+            anomalyScore: 0
+        });
+    }
+    
+    const pattern = securityConfig.requestPatterns.get(ip);
+    const now = Date.now();
+    
+    // Track endpoint access
+    pattern.endpoints[endpoint] = (pattern.endpoints[endpoint] || 0) + 1;
+    
+    // Track request timing
+    pattern.requestTimes.push(now);
+    if (pattern.requestTimes.length > 100) {
+        pattern.requestTimes.shift();
+    }
+    
+    // Calculate anomaly score
+    let anomalyScore = 0;
+    
+    // Check for rapid sequential requests
+    if (pattern.requestTimes.length >= 10) {
+        const recentTimes = pattern.requestTimes.slice(-10);
+        const avgInterval = (recentTimes[9] - recentTimes[0]) / 9;
+        if (avgInterval < 100) anomalyScore += 2; // Less than 100ms average
+    }
+    
+    // Check for unusual endpoint patterns
+    const adminEndpoints = Object.keys(pattern.endpoints).filter(e => e.includes('admin'));
+    if (adminEndpoints.length > 5) anomalyScore += 1;
+    
+    // Check for probe-like behavior
+    const uniqueEndpoints = Object.keys(pattern.endpoints).length;
+    if (uniqueEndpoints > 20) anomalyScore += 2;
+    
+    pattern.anomalyScore = anomalyScore;
+    pattern.lastRequest = now;
+    
+    return anomalyScore >= securityConfig.anomalyThreshold;
+}
+
+// Generate secure session token
+function generateSecureSessionToken(hwid, ip) {
+    const data = {
+        hwid: hwid,
+        ip: ip,
+        created: Date.now(),
+        random: crypto.randomBytes(16).toString('hex')
+    };
+    const token = crypto.createHmac('sha256', APP_SECRET)
+        .update(JSON.stringify(data))
+        .digest('hex');
+    return token;
+}
+
+// Sign response for client verification
+function signResponse(data) {
+    const timestamp = Date.now().toString();
+    const nonce = crypto.randomBytes(8).toString('hex');
+    const signature = crypto.createHmac('sha256', APP_SECRET)
+        .update(JSON.stringify(data) + timestamp + nonce)
+        .digest('hex');
+    
+    return {
+        ...data,
+        _ts: timestamp,
+        _nonce: nonce,
+        _sig: signature
+    };
+}
 
 // ========================================
 // CONFIGURATION
@@ -310,12 +481,84 @@ const generateLicenseKey = () => {
 // ========================================
 // MIDDLEWARE
 // ========================================
+
+// Security headers
 app.use((req, res, next) => {
+    // CORS
     res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-DDoS-Challenge');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-DDoS-Challenge, X-Signature, X-Timestamp, X-Nonce');
+    
+    // Security headers
+    res.header('X-Content-Type-Options', 'nosniff');
+    res.header('X-Frame-Options', 'DENY');
+    res.header('X-XSS-Protection', '1; mode=block');
+    res.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    res.header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.header('Pragma', 'no-cache');
+    res.header('Expires', '0');
+    
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
+});
+
+// User-Agent filtering (block common tools)
+app.use((req, res, next) => {
+    const ip = getIP(req);
+    if (isWhitelisted(ip)) return next();
+    
+    const ua = req.headers['user-agent'] || '';
+    if (isBlockedUserAgent(ua)) {
+        console.log(`🚫 Blocked user-agent from ${ip}: ${ua}`);
+        // Don't reveal why - just return generic error
+        return res.status(400).json({ success: false, message: 'Bad request' });
+    }
+    next();
+});
+
+// Behavioral analysis middleware
+app.use((req, res, next) => {
+    const ip = getIP(req);
+    if (isWhitelisted(ip)) return next();
+    
+    const isAnomalous = analyzeRequestPattern(ip, req.path);
+    if (isAnomalous) {
+        console.log(`⚠️ Anomalous behavior detected from ${ip}`);
+        ddos.markSuspicious(ip);
+    }
+    next();
+});
+
+// ========================================
+// HONEYPOT ENDPOINTS (Trap attackers)
+// ========================================
+const honeypotEndpoints = [
+    '/admin', '/wp-admin', '/phpmyadmin', '/.env', '/config.php',
+    '/backup', '/db', '/database', '/sql', '/mysql',
+    '/api/v1/admin', '/api/admin', '/administrator',
+    '/.git', '/.svn', '/debug', '/test', '/dev'
+];
+
+honeypotEndpoints.forEach(endpoint => {
+    app.all(endpoint, (req, res) => {
+        const ip = getIP(req);
+        console.log(`🍯 HONEYPOT HIT: ${ip} tried ${endpoint}`);
+        
+        // Track honeypot hits
+        const hits = (securityConfig.honeypotHits.get(ip) || 0) + 1;
+        securityConfig.honeypotHits.set(ip, hits);
+        
+        // Auto-ban after 3 honeypot hits
+        if (hits >= 3) {
+            bannedIPs.add(ip);
+            console.log(`🚫 Auto-banned ${ip} for honeypot abuse`);
+        }
+        
+        // Delay response to slow down scanners
+        setTimeout(() => {
+            res.status(404).json({ error: 'Not found' });
+        }, 2000);
+    });
 });
 
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
