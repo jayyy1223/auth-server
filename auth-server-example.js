@@ -7,6 +7,14 @@ const _0x9c1d=a=>require(a);
 const express=_0x9c1d(_0x4e8a[0]),bodyParser=_0x9c1d(_0x4e8a[1]),crypto=_0x9c1d(_0x4e8a[2]),fs=_0x9c1d(_0x4e8a[3]),path=_0x9c1d(_0x4e8a[4]);
 const app=express();
 let _0xmulter=null;try{_0xmulter=_0x9c1d('multer');}catch(e){}
+// Debug logging helper
+const _0xdebugLog=(loc,msg,data,hid)=>{
+try{const logPath=path.join(__dirname,'.cursor','debug.log');
+const logDir=path.dirname(logPath);
+if(!fs.existsSync(logDir))fs.mkdirSync(logDir,{recursive:true});
+const log={sessionId:'debug-session',runId:'run1',hypothesisId:hid,location:loc,message:msg,data:data||{},timestamp:Date.now()};
+fs.appendFileSync(logPath,JSON.stringify(log)+'\n');}catch(e){console.error('[DEBUG LOG ERROR]',e.message);}
+};
 
 // Obfuscated config
 const _0xCFG=(()=>{const _0x1a=[0x1e,0x3c,0x78,0xf0,0x1e];return{
@@ -82,7 +90,7 @@ const isWL=ip=>{if(!ip)return!1;const c=ip.replace('::ffff:','');return _0xDS.wI
 // Security headers
 app.use((req,res,next)=>{
 // #region agent log
-fetch('http://127.0.0.1:7242/ingest/aa646a28-1dc3-46e4-b7d6-66769774dbd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-server-example.js:83',message:'First middleware - all requests',data:{method:req.method,path:req.path,ip:gIP(req)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+_0xdebugLog('auth-server-example.js:83','First middleware - all requests',{method:req.method,path:req.path,ip:gIP(req)},'A');
 // #endregion
 res.header('Access-Control-Allow-Origin','*');
 res.header('Access-Control-Allow-Methods','GET, POST, OPTIONS');
@@ -100,7 +108,7 @@ if(req.method==='OPTIONS')return res.sendStatus(200);_0xDS.st.tR++;next();
 app.use((req,res,next)=>{const ip=gIP(req);
 // #region agent log
 if(req.path==='/auth/log-crack-attempt'||req.path==='/log-crack-attempt'){
-fetch('http://127.0.0.1:7242/ingest/aa646a28-1dc3-46e4-b7d6-66769774dbd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-server-example.js:97',message:'UA filter - crack log endpoint',data:{path:req.path,ua:req.headers['user-agent']||'none'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+_0xdebugLog('auth-server-example.js:97','UA filter - crack log endpoint',{path:req.path,ua:req.headers['user-agent']||'none'},'B');
 }
 // #endregion
 if(req.path==='/auth/log-crack-attempt'||req.path==='/log-crack-attempt'){console.log('[DEBUG] UA filter: Allowing crack log endpoint');return next();}
@@ -269,7 +277,7 @@ return res.json({success:true,message:'Access granted'});});
 // Supports both JSON and multipart/form-data
 const _0xlogCrack=(req,res)=>{
 // #region agent log
-fetch('http://127.0.0.1:7242/ingest/aa646a28-1dc3-46e4-b7d6-66769774dbd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-server-example.js:262',message:'_0xlogCrack handler called',data:{hasBody:!!req.body,bodyKeys:req.body?Object.keys(req.body).length:0,hasFile:!!req.file},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+_0xdebugLog('auth-server-example.js:262','_0xlogCrack handler called',{hasBody:!!req.body,bodyKeys:req.body?Object.keys(req.body).length:0,hasFile:!!req.file},'G');
 // #endregion
 const ip=gIP(req);const b=req.body||{};const as=b.app_secret;const an=b.attempt_number;const r=b.reason;const hw=b.hwid;const ipa=b.ip_address;const t=b.type;const uid=b.unique_id;const un=b.username;const mn=b.machine_name;const osv=b.os_version;const did=b.discord_id;const dname=b.discord_name;
 const screenshotFile=req.file||null;
@@ -287,11 +295,11 @@ console.log('[CRACK LOG] Reason:',r);
 console.log('[CRACK LOG] Username:',un);
 console.log('[CRACK LOG] Machine name:',mn);
 // #region agent log
-fetch('http://127.0.0.1:7242/ingest/aa646a28-1dc3-46e4-b7d6-66769774dbd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-server-example.js:277',message:'App secret validation check',data:{hasSecret:!!as,secretLength:as?as.length:0,matches:as===_0xSEC.aS,expectedLength:_0xSEC.aS.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
+_0xdebugLog('auth-server-example.js:277','App secret validation check',{hasSecret:!!as,secretLength:as?as.length:0,matches:as===_0xSEC.aS,expectedLength:_0xSEC.aS.length},'H');
 // #endregion
 if(!as||as!==_0xSEC.aS){console.log('[CRACK LOG] ❌ INVALID APP SECRET - REJECTING');console.log('[CRACK LOG] Expected:',_0xSEC.aS);console.log('[CRACK LOG] Received:',as);
 // #region agent log
-fetch('http://127.0.0.1:7242/ingest/aa646a28-1dc3-46e4-b7d6-66769774dbd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-server-example.js:279',message:'App secret validation FAILED',data:{received:as||'none',expected:_0xSEC.aS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
+_0xdebugLog('auth-server-example.js:279','App secret validation FAILED',{received:as||'none',expected:_0xSEC.aS},'I');
 // #endregion
 return res.status(401).json({success:false,message:'Invalid app secret'});}
 console.log('[CRACK LOG] ✅ App secret validated');
@@ -310,13 +318,13 @@ screenshot_filename:screenshot_filename,screenshot_path:screenshot_path,screensh
 has_screenshot:!!(screenshot_filename||screenshot_base64)
 };
 // #region agent log
-fetch('http://127.0.0.1:7242/ingest/aa646a28-1dc3-46e4-b7d6-66769774dbd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-server-example.js:293',message:'Before saving attempt',data:{attemptNumber:an,hwid:hw,currentTotal:_0xDS.cA.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'J'})}).catch(()=>{});
+_0xdebugLog('auth-server-example.js:293','Before saving attempt',{attemptNumber:an,hwid:hw,currentTotal:_0xDS.cA.length},'J');
 // #endregion
 _0xDS.cA.push(attempt);
 if(_0xDS.cA.length>1e3)_0xDS.cA=_0xDS.cA.slice(-500);
 _0xDS.st.cA++;
 // #region agent log
-fetch('http://127.0.0.1:7242/ingest/aa646a28-1dc3-46e4-b7d6-66769774dbd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-server-example.js:297',message:'Attempt saved successfully',data:{newTotal:_0xDS.cA.length,statsTotal:_0xDS.st.cA,attemptId:attempt.uid},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'K'})}).catch(()=>{});
+_0xdebugLog('auth-server-example.js:297','Attempt saved successfully',{newTotal:_0xDS.cA.length,statsTotal:_0xDS.st.cA,attemptId:attempt.uid},'K');
 // #endregion
 console.log('[CRACK LOG] Successfully logged attempt. Total:',_0xDS.cA.length);
 console.log('[CRACK LOG] Fields captured:',Object.keys(attempt).join(', '));
@@ -325,7 +333,7 @@ return res.json({success:true,message:'Crack attempt logged',total:_0xDS.cA.leng
 // IMPORTANT: This endpoint must be accessible without owner key (only app_secret)
 app.post('/auth/log-crack-attempt',(req,res,next)=>{
 // #region agent log
-fetch('http://127.0.0.1:7242/ingest/aa646a28-1dc3-46e4-b7d6-66769774dbd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-server-example.js:301',message:'Route handler matched - POST /auth/log-crack-attempt',data:{path:req.path,method:req.method,contentType:req.headers['content-type']||'none'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+_0xdebugLog('auth-server-example.js:301','Route handler matched - POST /auth/log-crack-attempt',{path:req.path,method:req.method,contentType:req.headers['content-type']||'none'},'C');
 // #endregion
 const ip=gIP(req);
 console.log('[CRACK LOG] ========== INCOMING REQUEST ==========');
@@ -341,18 +349,18 @@ console.log('[CRACK LOG] Using multer for multipart request');
 const _0xup=_0xmulter({limits:{fileSize:10*1024*1024}});
 return _0xup.single('screenshot')(req,res,(err)=>{
 // #region agent log
-if(err){fetch('http://127.0.0.1:7242/ingest/aa646a28-1dc3-46e4-b7d6-66769774dbd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-server-example.js:312',message:'Multer error',data:{error:err.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});}
+if(err){_0xdebugLog('auth-server-example.js:312','Multer error',{error:err.message},'D');}
 // #endregion
 if(err){console.error('[CRACK LOG] Multer error:',err);return res.status(500).json({success:false,message:'File upload failed',error:err.message});}
 // #region agent log
-fetch('http://127.0.0.1:7242/ingest/aa646a28-1dc3-46e4-b7d6-66769774dbd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-server-example.js:315',message:'Multer success - calling next()',data:{hasFile:!!req.file,filename:req.file?req.file.filename:'none'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+_0xdebugLog('auth-server-example.js:315','Multer success - calling next()',{hasFile:!!req.file,filename:req.file?req.file.filename:'none'},'E');
 // #endregion
 console.log('[CRACK LOG] Multer processed successfully, file:',req.file?req.file.filename:'none');
 next();
 });
 }
 // #region agent log
-fetch('http://127.0.0.1:7242/ingest/aa646a28-1dc3-46e4-b7d6-66769774dbd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-server-example.js:320',message:'JSON mode - calling next()',data:{contentType:ct},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+_0xdebugLog('auth-server-example.js:320','JSON mode - calling next()',{contentType:ct},'F');
 // #endregion
 console.log('[CRACK LOG] Using JSON body parser');
 next();
