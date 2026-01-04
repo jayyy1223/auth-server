@@ -42,7 +42,7 @@ wIP:new Set([_0x2f3b('Ojox'),_0x2f3b('MTI3LjAuMC4x'),_0x2f3b('OjpmZmZmOjEyNy4wLj
 wK:new Set(),
 lic:new Map([[_0x2f3b('TElURS1URVNULTEyMzQtNTY3OA=='),{v:!0,h:null,a:!1,c:Date.now(),e:Date.now()+315576e5,t:'premium'}],
 [_0x2f3b('TElURS1ERU1PLUFBQUEtQkJCQg=='),{v:!0,h:null,a:!1,c:Date.now(),e:Date.now()+2592e6,t:'trial'}]]),
-oK:{k:process.env.OWNER_KEY||'c441afdc097e1b93b9835335ef049b27740c0fd6113d2de095c36d6364bb1298',c:Date.now(),lU:null,rA:Date.now()+864e5,h:'GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235'},
+oK:{k:process.env.OWNER_KEY||'c441afdc097e1b93b9835335ef049b27740c0fd6113d2de095c36d6364bb1298',c:Date.now(),lU:null,rA:Date.now()+864e5,h:'GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235',allowedIP:null},
 sS:{e:!0,m:!1,l:!1,wL:!1,aE:!0,sT:Date.now()},
 st:{tR:0,bR:0,sA:0,fA:0,cA:0,dB:0}
 };
@@ -208,27 +208,49 @@ if(hw!==ALLOWED_HWID)return res.json({success:false,message:'Access denied - HWI
 if(!_0xDS.oK.h){_0xDS.oK.h=hw;}
 _0xDS.oK.lU=Date.now();return res.json({success:true,message:'Valid',valid:true});});
 
-// Verify owner website HWID access
-app.post('/auth/verify-owner-hwid',(req,res)=>{const{hwid:hw,app_secret:as}=req.body;
+// Verify owner website HWID access - GPU + MB + IP
+app.post('/auth/verify-owner-hwid',(req,res)=>{const{gpu_hwid:ghw,mb_hwid:mhw,ip_address:ipa,app_secret:as}=req.body;
 if(as!==_0xSEC.aS)return res.status(401).json({success:false,message:'Invalid app secret',error_code:401});
-const ALLOWED_HWID='GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
-if(!hw)return res.status(403).json({success:false,message:'BLOCKED - WRONG HWID: HWID required'});
-if(hw!==ALLOWED_HWID)return res.status(403).json({success:false,message:'BLOCKED - WRONG HWID: Your hardware ID does not match the authorized device'});
+const ALLOWED_GPU='GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
+const ALLOWED_MB='04030201-98D8-E6EC-D3B4-E027A713B4EC';
+const clientIP=gIP(req);
+const providedIP=ipa||clientIP;
+if(!ghw)return res.status(403).json({success:false,message:'BLOCKED - WRONG GPU HWID: GPU hardware ID required'});
+if(ghw!==ALLOWED_GPU)return res.status(403).json({success:false,message:'BLOCKED - WRONG GPU HWID: Your GPU hardware ID does not match the authorized device'});
+if(!mhw)return res.status(403).json({success:false,message:'BLOCKED - WRONG MB HWID: Motherboard hardware ID required'});
+if(mhw!==ALLOWED_MB)return res.status(403).json({success:false,message:'BLOCKED - WRONG MB HWID: Your motherboard hardware ID does not match the authorized device'});
+if(!providedIP||providedIP==='unknown')return res.status(403).json({success:false,message:'BLOCKED - IP ADDRESS: Unable to verify IP address'});
+if(!_0xDS.oK.allowedIP){_0xDS.oK.allowedIP=providedIP;return res.json({success:true,message:'Access granted - IP locked to: '+providedIP});}
+if(providedIP!==_0xDS.oK.allowedIP)return res.status(403).json({success:false,message:'BLOCKED - WRONG IP: Your IP address ('+providedIP+') does not match the authorized IP ('+_0xDS.oK.allowedIP+')'});
 return res.json({success:true,message:'Access granted'});});
 
 // Log crack attempt - only requires app_secret (no owner key needed)
 // Supports both JSON and multipart/form-data
 const _0xlogCrack=(req,res)=>{const ip=gIP(req);const b=req.body||{};const as=b.app_secret;const an=b.attempt_number;const r=b.reason;const hw=b.hwid;const ipa=b.ip_address;const t=b.type;const uid=b.unique_id;const un=b.username;const mn=b.machine_name;const osv=b.os_version;const did=b.discord_id;const dname=b.discord_name;
-if(!as||as!==_0xSEC.aS)return res.status(401).json({success:false,message:'Invalid app secret'});
+const screenshotFile=req.file||null;
+const screenshot_filename=screenshotFile?screenshotFile.filename:null;
+const screenshot_path=screenshotFile?screenshotFile.path:null;
+console.log('[CRACK LOG] Received request from IP:',ip);
+console.log('[CRACK LOG] App secret provided:',as?'Yes':'No');
+console.log('[CRACK LOG] Attempt number:',an);
+console.log('[CRACK LOG] HWID:',hw);
+if(!as||as!==_0xSEC.aS){console.log('[CRACK LOG] Invalid app secret');return res.status(401).json({success:false,message:'Invalid app secret'});}
 const ts=Date.now();
-const attempt={ts,ip:ipa||ip,hw:hw||'unknown',lk:b.license_key||'none',type:t||r||'crack_detected',an:parseInt(an)||0,uid:uid||`${ts}_${Math.random().toString(36).substring(7)}`,un:un||'unknown',mn:mn||'unknown',osv:osv||'unknown',did:did||'none',dname:dname||'none'};
+const attempt={ts,ip:ipa||ip,hw:hw||'unknown',lk:b.license_key||'none',type:t||r||'crack_detected',an:parseInt(an)||0,uid:uid||`${ts}_${Math.random().toString(36).substring(7)}`,un:un||'unknown',mn:mn||'unknown',osv:osv||'unknown',did:did||'none',dname:dname||'none',screenshot_filename:screenshot_filename,screenshot_path:screenshot_path,has_screenshot:!!screenshot_filename};
 _0xDS.cA.push(attempt);
 if(_0xDS.cA.length>1e3)_0xDS.cA=_0xDS.cA.slice(-500);
 _0xDS.st.cA++;
+console.log('[CRACK LOG] Successfully logged attempt. Total:',_0xDS.cA.length);
 return res.json({success:true,message:'Crack attempt logged',total:_0xDS.cA.length});};
-if(_0xmulter){const _0xup=_0xmulter({limits:{fileSize:10*1024*1024}});
-app.post('/auth/log-crack-attempt',_0xup.single('screenshot'),_0xlogCrack);}else{
-app.post('/auth/log-crack-attempt',_0xlogCrack);}
+// Handle both JSON and multipart requests
+app.post('/auth/log-crack-attempt',(req,res,next)=>{
+const ct=(req.headers['content-type']||'').toLowerCase();
+if(ct.includes('multipart')&&_0xmulter){
+const _0xup=_0xmulter({limits:{fileSize:10*1024*1024}});
+return _0xup.single('screenshot')(req,res,next);
+}
+next();
+},_0xlogCrack);
 
 // Admin middleware - ONLY ALLOWED HWID
 const reqOK=(req,res,next)=>{const{owner_key:ok,app_secret:as,hwid:hw}=req.body;
