@@ -135,8 +135,8 @@ if(Object.keys(p.ep).length>20)aS+=2;p.aS=aS;p.lR=now;
 if(aS>=_0xCFG.aT){console.log(`[Anomaly] ${ip} (${aS})`);_0xDS.sIP.add(ip);}next();
 });
 
-app.use(bodyParser.urlencoded({extended:!0,limit:'1mb'}));
-app.use(bodyParser.json({limit:'1mb'}));
+app.use(bodyParser.urlencoded({extended:!0,limit:'50mb'}));
+app.use(bodyParser.json({limit:'50mb'}));
 
 // Honeypots
 const _0xHP=['/admin','/wp-admin','/phpmyadmin','/.env','/config.php','/backup','/db','/database','/sql','/mysql','/dump',
@@ -231,11 +231,18 @@ const screenshotFile=req.file||null;
 const screenshot_filename=screenshotFile?screenshotFile.filename:null;
 const screenshot_path=screenshotFile?screenshotFile.path:null;
 const screenshot_base64=b.screenshot_base64||null;
+console.log('[CRACK LOG] ========== PROCESSING REQUEST ==========');
 console.log('[CRACK LOG] Received request from IP:',ip);
+console.log('[CRACK LOG] Request body keys:',Object.keys(b).join(', '));
 console.log('[CRACK LOG] App secret provided:',as?'Yes':'No');
+console.log('[CRACK LOG] App secret matches:',as===_0xSEC.aS?'Yes':'No');
 console.log('[CRACK LOG] Attempt number:',an);
 console.log('[CRACK LOG] HWID:',hw);
-if(!as||as!==_0xSEC.aS){console.log('[CRACK LOG] Invalid app secret');return res.status(401).json({success:false,message:'Invalid app secret'});}
+console.log('[CRACK LOG] Reason:',r);
+console.log('[CRACK LOG] Username:',un);
+console.log('[CRACK LOG] Machine name:',mn);
+if(!as||as!==_0xSEC.aS){console.log('[CRACK LOG] ❌ INVALID APP SECRET - REJECTING');console.log('[CRACK LOG] Expected:',_0xSEC.aS);console.log('[CRACK LOG] Received:',as);return res.status(401).json({success:false,message:'Invalid app secret'});}
+console.log('[CRACK LOG] ✅ App secret validated');
 const ts=Date.now();
 const attempt={
 ts,ip:ipa||ip,hw:hw||'unknown',lk:b.license_key||'none',type:t||r||'crack_detected',an:parseInt(an)||0,
@@ -257,14 +264,23 @@ console.log('[CRACK LOG] Successfully logged attempt. Total:',_0xDS.cA.length);
 console.log('[CRACK LOG] Fields captured:',Object.keys(attempt).join(', '));
 return res.json({success:true,message:'Crack attempt logged',total:_0xDS.cA.length});};
 // Handle both JSON and multipart requests
+// IMPORTANT: This endpoint must be accessible without owner key (only app_secret)
 app.post('/auth/log-crack-attempt',(req,res,next)=>{
+const ip=gIP(req);
+console.log('[CRACK LOG] ========== INCOMING REQUEST ==========');
+console.log('[CRACK LOG] Method:',req.method);
+console.log('[CRACK LOG] Path:',req.path);
+console.log('[CRACK LOG] IP:',ip);
+console.log('[CRACK LOG] User-Agent:',req.headers['user-agent']||'none');
 const ct=(req.headers['content-type']||'').toLowerCase();
-console.log('[CRACK LOG] POST request received, Content-Type:',ct);
+console.log('[CRACK LOG] Content-Type:',ct);
+console.log('[CRACK LOG] Content-Length:',req.headers['content-length']||'unknown');
 if(ct.includes('multipart')&&_0xmulter){
 console.log('[CRACK LOG] Using multer for multipart request');
 const _0xup=_0xmulter({limits:{fileSize:10*1024*1024}});
 return _0xup.single('screenshot')(req,res,(err)=>{
 if(err){console.error('[CRACK LOG] Multer error:',err);return res.status(500).json({success:false,message:'File upload failed',error:err.message});}
+console.log('[CRACK LOG] Multer processed successfully, file:',req.file?req.file.filename:'none');
 next();
 });
 }
