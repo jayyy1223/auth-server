@@ -41,7 +41,7 @@ wIP:new Set([_0x2f3b('Ojox'),_0x2f3b('MTI3LjAuMC4x'),_0x2f3b('OjpmZmZmOjEyNy4wLj
 wK:new Set(),
 lic:new Map([[_0x2f3b('TElURS1URVNULTEyMzQtNTY3OA=='),{v:!0,h:null,a:!1,c:Date.now(),e:Date.now()+315576e5,t:'premium'}],
 [_0x2f3b('TElURS1ERU1PLUFBQUEtQkJCQg=='),{v:!0,h:null,a:!1,c:Date.now(),e:Date.now()+2592e6,t:'trial'}]]),
-oK:{k:process.env.OWNER_KEY||'c441afdc097e1b93b9835335ef049b27740c0fd6113d2de095c36d6364bb1298',c:Date.now(),lU:null,rA:Date.now()+864e5,h:null},
+oK:{k:process.env.OWNER_KEY||'c441afdc097e1b93b9835335ef049b27740c0fd6113d2de095c36d6364bb1298',c:Date.now(),lU:null,rA:Date.now()+864e5,h:'GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235'},
 sS:{e:!0,m:!1,l:!1,wL:!1,aE:!0,sT:Date.now()},
 st:{tR:0,bR:0,sA:0,fA:0,cA:0,dB:0}
 };
@@ -197,26 +197,30 @@ const age=Date.now()-sess.c;if(age>_0xCFG.seT){_0xDS.aS.delete(st);return res.js
 const hbAge=Date.now()-sess.lH;if(hbAge>_0xCFG.hI*_0xCFG.mMH){_0xDS.aS.delete(st);return res.json({success:!1,valid:!1,message:'Heartbeat expired'});}
 res.json({success:!0,valid:!0,session_age:age,expires_in:_0xCFG.seT-age});});
 
-// Owner key verify
+// Owner key verify - ONLY ALLOWED HWID
 app.post('/auth/verify-owner-key',(req,res)=>{const{owner_key:ok,app_secret:as,hwid:hw}=req.body;
-if(as!==_0xSEC.aS)return res.status(401).json(_0xRB.e('Invalid',401));
-if(ok!==_0xDS.oK.k)return res.json({success:!1,message:'Invalid'});
-if(!hw)return res.json({success:!1,message:'HWID required'});
-if(_0xDS.oK.h&&_0xDS.oK.h!==hw){return res.json({success:!1,message:'Owner key locked to different hardware'});}
+if(as!==_0xSEC.aS)return res.status(401).json({success:false,message:'Invalid app secret',error_code:401});
+if(ok!==_0xDS.oK.k)return res.json({success:false,message:'Invalid owner key'});
+const ALLOWED_HWID='GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
+if(!hw)return res.json({success:false,message:'HWID required'});
+if(hw!==ALLOWED_HWID)return res.json({success:false,message:'Access denied - HWID not authorized'});
 if(!_0xDS.oK.h){_0xDS.oK.h=hw;}
-_0xDS.oK.lU=Date.now();return res.json({success:!0,message:'Valid'});});
+_0xDS.oK.lU=Date.now();return res.json({success:true,message:'Valid',valid:true});});
 
 // Verify owner website HWID access
 app.post('/auth/verify-owner-hwid',(req,res)=>{const{hwid:hw,app_secret:as}=req.body;
-if(as!==_0xSEC.aS)return res.status(401).json(_0xRB.e('Invalid',401));
+if(as!==_0xSEC.aS)return res.status(401).json({success:false,message:'Invalid app secret',error_code:401});
 const ALLOWED_HWID='GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
-if(hw===ALLOWED_HWID)return res.json({success:!0,message:'Access granted'});
-return res.json({success:!1,message:'Access denied - HWID not authorized'});});
+if(hw===ALLOWED_HWID)return res.json({success:true,message:'Access granted'});
+return res.json({success:false,message:'Access denied - HWID not authorized'});});
 
-// Admin middleware
+// Admin middleware - ONLY ALLOWED HWID
 const reqOK=(req,res,next)=>{const{owner_key:ok,app_secret:as,hwid:hw}=req.body;
-if(as!==_0xSEC.aS||ok!==_0xDS.oK.k)return res.status(401).json(_0xRB.e('Unauthorized',401));
-if(_0xDS.oK.h&&hw&&_0xDS.oK.h!==hw)return res.status(403).json(_0xRB.e('Owner key locked to different hardware',403));next();};
+if(as!==_0xSEC.aS||ok!==_0xDS.oK.k)return res.status(401).json({success:false,message:'Unauthorized',error_code:401});
+const ALLOWED_HWID='GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
+if(!hw)return res.status(403).json({success:false,message:'HWID required',error_code:403});
+if(hw!==ALLOWED_HWID)return res.status(403).json({success:false,message:'Access denied - HWID not authorized',error_code:403});
+next();};
 
 // Admin endpoints
 app.post('/auth/admin/generate-key',reqOK,(req,res)=>{const{duration_days:dd=30,tier:t='standard'}=req.body;
@@ -264,7 +268,8 @@ app.post('/auth/admin/set-website-lock',reqOK,(req,res)=>{const{locked:l}=req.bo
 app.post('/auth/admin/set-auth-status',reqOK,(req,res)=>{const{enabled:e}=req.body;_0xDS.sS.aE=e!==!1;res.json({success:!0,auth_enabled:_0xDS.sS.aE});});
 
 app.post('/auth/admin/rotate-owner-key',reqOK,(req,res)=>{const nK=_0xCU.gT(32);
-const oldHwid=_0xDS.oK.h;_0xDS.oK={k:nK,c:Date.now(),lU:null,rA:Date.now()+864e5,h:oldHwid};res.json({success:!0,owner_key:nK,message:'Rotated'});});
+const ALLOWED_HWID='GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
+_0xDS.oK={k:nK,c:Date.now(),lU:null,rA:Date.now()+864e5,h:ALLOWED_HWID};res.json({success:true,owner_key:nK,message:'Rotated'});});
 
 app.post('/auth/admin/stats',reqOK,(req,res)=>{res.json({success:!0,total_licenses:_0xDS.lic.size,
 active_sessions:_0xDS.aS.size,banned_ips:_0xDS.bIP.size,banned_hwids:_0xDS.bHW.size,stats:_0xDS.st,
