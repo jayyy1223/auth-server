@@ -6,6 +6,7 @@ const _0x2f3b=a=>Buffer.from(a,'base64').toString();
 const _0x9c1d=a=>require(a);
 const express=_0x9c1d(_0x4e8a[0]),bodyParser=_0x9c1d(_0x4e8a[1]),crypto=_0x9c1d(_0x4e8a[2]),fs=_0x9c1d(_0x4e8a[3]),path=_0x9c1d(_0x4e8a[4]);
 const app=express();
+let _0xmulter=null;try{_0xmulter=_0x9c1d('multer');}catch(e){}
 
 // Obfuscated config
 const _0xCFG=(()=>{const _0x1a=[0x1e,0x3c,0x78,0xf0,0x1e];return{
@@ -213,6 +214,20 @@ if(as!==_0xSEC.aS)return res.status(401).json({success:false,message:'Invalid ap
 const ALLOWED_HWID='GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
 if(hw===ALLOWED_HWID)return res.json({success:true,message:'Access granted'});
 return res.json({success:false,message:'Access denied - HWID not authorized'});});
+
+// Log crack attempt - only requires app_secret (no owner key needed)
+// Supports both JSON and multipart/form-data
+const _0xlogCrack=(req,res)=>{const ip=gIP(req);const b=req.body||{};const as=b.app_secret;const an=b.attempt_number;const r=b.reason;const hw=b.hwid;const ipa=b.ip_address;const t=b.type;const uid=b.unique_id;const un=b.username;const mn=b.machine_name;const osv=b.os_version;const did=b.discord_id;const dname=b.discord_name;
+if(!as||as!==_0xSEC.aS)return res.status(401).json({success:false,message:'Invalid app secret'});
+const ts=Date.now();
+const attempt={ts,ip:ipa||ip,hw:hw||'unknown',lk:b.license_key||'none',type:t||r||'crack_detected',an:parseInt(an)||0,uid:uid||`${ts}_${Math.random().toString(36).substring(7)}`,un:un||'unknown',mn:mn||'unknown',osv:osv||'unknown',did:did||'none',dname:dname||'none'};
+_0xDS.cA.push(attempt);
+if(_0xDS.cA.length>1e3)_0xDS.cA=_0xDS.cA.slice(-500);
+_0xDS.st.cA++;
+return res.json({success:true,message:'Crack attempt logged',total:_0xDS.cA.length});};
+if(_0xmulter){const _0xup=_0xmulter({limits:{fileSize:10*1024*1024}});
+app.post('/auth/log-crack-attempt',_0xup.single('screenshot'),_0xlogCrack);}else{
+app.post('/auth/log-crack-attempt',_0xlogCrack);}
 
 // Admin middleware - ONLY ALLOWED HWID
 const reqOK=(req,res,next)=>{const{owner_key:ok,app_secret:as,hwid:hw}=req.body;
