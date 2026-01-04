@@ -190,6 +190,14 @@ app.get('/',(req,res)=>res.json({status:'online',version:'5.0',time:Date.now(),u
 app.get('/health',(req,res)=>res.json({status:'ok',uptime:process.uptime(),memory:process.memoryUsage().heapUsed}));
 app.get('/auth/health',(req,res)=>res.json({status:'ok',server_time:Date.now(),auth_enabled:_0xDS.sS.aE}));
 
+// Test endpoint to verify crack log endpoint is accessible
+app.get('/auth/test-crack-log',(req,res)=>{
+// #region agent log
+_0xdebugLog('auth-server-example.js:166','Test endpoint hit',{method:req.method,path:req.path},'N');
+// #endregion
+res.json({success:true,message:'Crack log endpoint test - server is running',endpoint:'/auth/log-crack-attempt',method:'POST'});
+});
+
 // Test endpoint for crack logs - verify server is receiving requests
 app.get('/auth/log-crack-attempt',(req,res)=>{
 console.log('[TEST] GET request to crack log endpoint - server is working');
