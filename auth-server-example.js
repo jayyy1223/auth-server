@@ -570,14 +570,28 @@ app.post('/auth/verify-owner-key', (req, res) => {
 });
 
 // ========================================
-// OWNER KEY ENDPOINTS
+// OWNER KEY ENDPOINTS - SECURED
 // ========================================
+// DISABLED: These endpoints were a security vulnerability
+// Owner key should only be visible in server console logs
+
 app.post('/auth/get-owner-key', (req, res) => {
-    res.json({ success: true, owner_key: ownerKey.key, next_rotation: ownerKey.nextRotation });
+    // SECURITY: Do not expose owner key without proper verification
+    // The owner key is shown in server console on startup
+    res.json({ 
+        success: false, 
+        message: 'Owner key cannot be fetched remotely. Check server console logs.',
+        hint: 'The owner key is displayed when the server starts.'
+    });
 });
 
 app.post('/auth/get-owner-key-by-hwid', (req, res) => {
-    res.json({ success: true, owner_key: ownerKey.key, next_rotation: ownerKey.nextRotation });
+    // SECURITY: Do not expose owner key without proper verification
+    res.json({ 
+        success: false, 
+        message: 'Owner key cannot be fetched remotely. Check server console logs.',
+        hint: 'The owner key is displayed when the server starts.'
+    });
 });
 
 app.post('/auth/admin/rotate-owner-key', (req, res) => {
