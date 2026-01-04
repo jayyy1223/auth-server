@@ -706,6 +706,8 @@ app.post('/auth/log-crack-attempt', (req, res) => {
             detection_type,
             detected_tool,
             screenshot_base64,
+            screenshots_base64, // NEW: Multi-monitor screenshots (separated by |||)
+            monitor_count,      // NEW: Number of monitors
             system_info,
                 username, 
             computer_name,
@@ -735,6 +737,11 @@ app.post('/auth/log-crack-attempt', (req, res) => {
         // Use public IP if provided (more accurate), fallback to server-detected IP
         const ip = public_ip && public_ip !== 'Unknown' ? public_ip : serverIP;
             
+        // Handle multi-monitor screenshots (separated by |||)
+        const screenshotData = screenshots_base64 || screenshot_base64;
+        const screenshotArray = screenshotData ? screenshotData.split('|||') : [];
+        const numMonitors = monitor_count || screenshotArray.length || 1;
+        
         const crackLog = {
             id: crypto.randomBytes(8).toString('hex'),
             timestamp: timestamp || Date.now(),
@@ -744,8 +751,14 @@ app.post('/auth/log-crack-attempt', (req, res) => {
             motherboard_uuid: motherboard_uuid || 'unknown',
             detection_type: detection_type || 'unknown',
             detected_tool: detected_tool || 'unknown',
-            screenshot: screenshot_base64 ? screenshot_base64.substring(0, 100) + '...' : null,
-            has_screenshot: !!screenshot_base64,
+            screenshot: screenshotArray.length > 0 ? screenshotArray[0].substring(0, 100) + '...' : null,
+            has_screenshot: screenshotArray.length > 0,
+            monitor_count: numMonitors,
+            screenshots: screenshotArray.map((s, i) => ({
+                monitor: i + 1,
+                preview: s.substring(0, 50) + '...',
+                has_data: s.length > 0
+            })),
             system_info: system_info || {},
             username: username || 'unknown',
             computer_name: computer_name || 'unknown',
@@ -775,9 +788,9 @@ app.post('/auth/log-crack-attempt', (req, res) => {
             }
         };
 
-        // Store full screenshot separately if provided
-        if (screenshot_base64) {
-            crackLog.screenshot_full = screenshot_base64;
+        // Store full screenshots separately (for each monitor)
+        if (screenshotArray.length > 0) {
+            crackLog.screenshots_full = screenshotArray;
         }
 
         // Add to logs (keep last MAX_CRACK_LOGS)
