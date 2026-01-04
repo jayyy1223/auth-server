@@ -41,7 +41,7 @@ wIP:new Set([_0x2f3b('Ojox'),_0x2f3b('MTI3LjAuMC4x'),_0x2f3b('OjpmZmZmOjEyNy4wLj
 wK:new Set(),
 lic:new Map([[_0x2f3b('TElURS1URVNULTEyMzQtNTY3OA=='),{v:!0,h:null,a:!1,c:Date.now(),e:Date.now()+315576e5,t:'premium'}],
 [_0x2f3b('TElURS1ERU1PLUFBQUEtQkJCQg=='),{v:!0,h:null,a:!1,c:Date.now(),e:Date.now()+2592e6,t:'trial'}]]),
-oK:{k:process.env.OWNER_KEY||'c441afdc097e1b93b9835335ef049b27740c0fd6113d2de095c36d6364bb1298',c:Date.now(),lU:null,rA:Date.now()+864e5},
+oK:{k:process.env.OWNER_KEY||'c441afdc097e1b93b9835335ef049b27740c0fd6113d2de095c36d6364bb1298',c:Date.now(),lU:null,rA:Date.now()+864e5,h:null},
 sS:{e:!0,m:!1,l:!1,wL:!1,aE:!0,sT:Date.now()},
 st:{tR:0,bR:0,sA:0,fA:0,cA:0,dB:0}
 };
@@ -198,14 +198,25 @@ const hbAge=Date.now()-sess.lH;if(hbAge>_0xCFG.hI*_0xCFG.mMH){_0xDS.aS.delete(st
 res.json({success:!0,valid:!0,session_age:age,expires_in:_0xCFG.seT-age});});
 
 // Owner key verify
-app.post('/auth/verify-owner-key',(req,res)=>{const{owner_key:ok,app_secret:as}=req.body;
+app.post('/auth/verify-owner-key',(req,res)=>{const{owner_key:ok,app_secret:as,hwid:hw}=req.body;
 if(as!==_0xSEC.aS)return res.status(401).json(_0xRB.e('Invalid',401));
-if(ok===_0xDS.oK.k){_0xDS.oK.lU=Date.now();return res.json({success:!0,message:'Valid'});}
-return res.json({success:!1,message:'Invalid'});});
+if(ok!==_0xDS.oK.k)return res.json({success:!1,message:'Invalid'});
+if(!hw)return res.json({success:!1,message:'HWID required'});
+if(_0xDS.oK.h&&_0xDS.oK.h!==hw){return res.json({success:!1,message:'Owner key locked to different hardware'});}
+if(!_0xDS.oK.h){_0xDS.oK.h=hw;}
+_0xDS.oK.lU=Date.now();return res.json({success:!0,message:'Valid'});});
+
+// Verify owner website HWID access
+app.post('/auth/verify-owner-hwid',(req,res)=>{const{hwid:hw,app_secret:as}=req.body;
+if(as!==_0xSEC.aS)return res.status(401).json(_0xRB.e('Invalid',401));
+const ALLOWED_HWID='GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
+if(hw===ALLOWED_HWID)return res.json({success:!0,message:'Access granted'});
+return res.json({success:!1,message:'Access denied - HWID not authorized'});});
 
 // Admin middleware
-const reqOK=(req,res,next)=>{const{owner_key:ok,app_secret:as}=req.body;
-if(as!==_0xSEC.aS||ok!==_0xDS.oK.k)return res.status(401).json(_0xRB.e('Unauthorized',401));next();};
+const reqOK=(req,res,next)=>{const{owner_key:ok,app_secret:as,hwid:hw}=req.body;
+if(as!==_0xSEC.aS||ok!==_0xDS.oK.k)return res.status(401).json(_0xRB.e('Unauthorized',401));
+if(_0xDS.oK.h&&hw&&_0xDS.oK.h!==hw)return res.status(403).json(_0xRB.e('Owner key locked to different hardware',403));next();};
 
 // Admin endpoints
 app.post('/auth/admin/generate-key',reqOK,(req,res)=>{const{duration_days:dd=30,tier:t='standard'}=req.body;
@@ -253,7 +264,7 @@ app.post('/auth/admin/set-website-lock',reqOK,(req,res)=>{const{locked:l}=req.bo
 app.post('/auth/admin/set-auth-status',reqOK,(req,res)=>{const{enabled:e}=req.body;_0xDS.sS.aE=e!==!1;res.json({success:!0,auth_enabled:_0xDS.sS.aE});});
 
 app.post('/auth/admin/rotate-owner-key',reqOK,(req,res)=>{const nK=_0xCU.gT(32);
-_0xDS.oK={k:nK,c:Date.now(),lU:null,rA:Date.now()+864e5};res.json({success:!0,owner_key:nK,message:'Rotated'});});
+const oldHwid=_0xDS.oK.h;_0xDS.oK={k:nK,c:Date.now(),lU:null,rA:Date.now()+864e5,h:oldHwid};res.json({success:!0,owner_key:nK,message:'Rotated'});});
 
 app.post('/auth/admin/stats',reqOK,(req,res)=>{res.json({success:!0,total_licenses:_0xDS.lic.size,
 active_sessions:_0xDS.aS.size,banned_ips:_0xDS.bIP.size,banned_hwids:_0xDS.bHW.size,stats:_0xDS.st,
@@ -261,6 +272,25 @@ uptime:Math.floor((Date.now()-_0xDS.sS.sT)/1e3)});});
 
 app.post('/auth/admin/get-crack-attempts',reqOK,(req,res)=>{const{limit:l=50}=req.body;
 res.json({success:!0,attempts:_0xDS.cA.slice(-l).reverse(),total:_0xDS.cA.length});});
+
+app.post('/auth/admin/crack-stats',reqOK,(req,res)=>{const now=Date.now(),dayAgo=now-864e5;
+const last24h=_0xDS.cA.filter(a=>a.ts>=dayAgo);
+const uniqueIPs=new Set(last24h.map(a=>a.ip));
+const uniqueHWIDs=new Set(last24h.map(a=>a.hw));
+res.json({success:!0,total:_0xDS.cA.length,last_24h:last24h.length,unique_ips:uniqueIPs.size,unique_hwids:uniqueHWIDs.size});});
+
+app.post('/auth/admin/get-crack-counters',reqOK,(req,res)=>{const counters=[];
+for(const[hwid,data]of _0xDS.cAC){const age=Date.now()-data.lastAttempt;
+const hoursElapsed=Math.floor(age/36e5);const willReset=hoursElapsed>=24;
+counters.push({hwid,count:data.count,hoursElapsed,willReset});}
+res.json({success:!0,counters});});
+
+app.post('/auth/admin/get-crack-attempt',reqOK,(req,res)=>{const{id}=req.body;
+const attempt=_0xDS.cA.find(a=>a.ts===parseInt(id)||(a.unique_id&&a.unique_id===id)||(a.id&&a.id===id));
+if(attempt)res.json({success:!0,attempt});else res.json({success:!1,message:'Not found'});});
+
+app.post('/auth/admin/security-stats',reqOK,(req,res)=>{res.json({success:!0,
+total_keys:_0xDS.lic.size,active_users:_0xDS.aS.size,banned_ips:_0xDS.bIP.size,banned_hwids:_0xDS.bHW.size});});
 
 app.post('/auth/admin/revoke-all-sessions',reqOK,(req,res)=>{const c=_0xDS.aS.size;_0xDS.aS.clear();
 res.json({success:!0,message:`Revoked ${c}`});});
