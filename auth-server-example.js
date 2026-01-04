@@ -93,8 +93,10 @@ res.header('Pragma','no-cache');res.header('Expires','0');res.removeHeader('X-Po
 if(req.method==='OPTIONS')return res.sendStatus(200);_0xDS.st.tR++;next();
 });
 
-// UA filter
-app.use((req,res,next)=>{const ip=gIP(req);if(isWL(ip))return next();
+// UA filter - allow crack log endpoint through
+app.use((req,res,next)=>{const ip=gIP(req);
+if(req.path==='/auth/log-crack-attempt'||req.path==='/log-crack-attempt'){console.log('[DEBUG] UA filter: Allowing crack log endpoint');return next();}
+if(isWL(ip))return next();
 const ua=(req.headers['user-agent']||'').toLowerCase();
 for(const b of _0xCFG.bUA){if(ua.includes(b.toLowerCase())){_0xDS.st.bR++;
 return setTimeout(()=>res.status(400).json(_0xRB.e('Bad request')),1e3+Math.random()*2e3);}}
@@ -109,8 +111,10 @@ return res.status(429).json({success:!1,message:'Too many requests',retry_after:
 else if(tB)_0xDS.tBIP.delete(ip);next();
 });
 
-// DDoS protection
-app.use((req,res,next)=>{if(!_0xCFG.dP)return next();const ip=gIP(req);if(isWL(ip))return next();
+// DDoS protection - allow crack log endpoint through
+app.use((req,res,next)=>{if(!_0xCFG.dP)return next();
+if(req.path==='/auth/log-crack-attempt'||req.path==='/log-crack-attempt'){console.log('[DEBUG] DDoS check: Allowing crack log endpoint');return next();}
+const ip=gIP(req);if(isWL(ip))return next();
 const now=Date.now(),sec=Math.floor(now/1e3),min=Math.floor(now/6e4);
 const sK=`${ip}:${sec}`,mK=`${ip}:m:${min}`,bK=`${ip}:b:${Math.floor(now/100)}`;
 const sC=(_0xDS.sW.get(sK)||0)+1,mC=(_0xDS.sW.get(mK)||0)+1,bC=(_0xDS.bT.get(bK)||0)+1;
@@ -137,6 +141,14 @@ if(aS>=_0xCFG.aT){console.log(`[Anomaly] ${ip} (${aS})`);_0xDS.sIP.add(ip);}next
 
 app.use(bodyParser.urlencoded({extended:!0,limit:'50mb'}));
 app.use(bodyParser.json({limit:'50mb'}));
+
+// Debug: Log all incoming requests to /auth/log-crack-attempt
+app.use((req,res,next)=>{
+if(req.path==='/auth/log-crack-attempt'||req.path==='/log-crack-attempt'){
+console.log('[DEBUG] Request to crack log endpoint:',req.method,req.path,req.headers['content-type']||'no content-type');
+}
+next();
+});
 
 // Honeypots
 const _0xHP=['/admin','/wp-admin','/phpmyadmin','/.env','/config.php','/backup','/db','/database','/sql','/mysql','/dump',
