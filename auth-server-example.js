@@ -41,7 +41,7 @@ wIP:new Set([_0x2f3b('Ojox'),_0x2f3b('MTI3LjAuMC4x'),_0x2f3b('OjpmZmZmOjEyNy4wLj
 wK:new Set(),
 lic:new Map([[_0x2f3b('TElURS1URVNULTEyMzQtNTY3OA=='),{v:!0,h:null,a:!1,c:Date.now(),e:Date.now()+315576e5,t:'premium'}],
 [_0x2f3b('TElURS1ERU1PLUFBQUEtQkJCQg=='),{v:!0,h:null,a:!1,c:Date.now(),e:Date.now()+2592e6,t:'trial'}]]),
-oK:{k:crypto.randomBytes(32).toString('hex'),c:Date.now(),lU:null,rA:Date.now()+864e5},
+oK:{k:process.env.OWNER_KEY||'c441afdc097e1b93b9835335ef049b27740c0fd6113d2de095c36d6364bb1298',c:Date.now(),lU:null,rA:Date.now()+864e5},
 sS:{e:!0,m:!1,l:!1,wL:!1,aE:!0,sT:Date.now()},
 st:{tR:0,bR:0,sA:0,fA:0,cA:0,dB:0}
 };
