@@ -212,8 +212,9 @@ _0xDS.oK.lU=Date.now();return res.json({success:true,message:'Valid',valid:true}
 app.post('/auth/verify-owner-hwid',(req,res)=>{const{hwid:hw,app_secret:as}=req.body;
 if(as!==_0xSEC.aS)return res.status(401).json({success:false,message:'Invalid app secret',error_code:401});
 const ALLOWED_HWID='GPU-7af1ba56-2242-cd8c-f9e3-cb91eede2235';
-if(hw===ALLOWED_HWID)return res.json({success:true,message:'Access granted'});
-return res.json({success:false,message:'Access denied - HWID not authorized'});});
+if(!hw)return res.status(403).json({success:false,message:'BLOCKED - WRONG HWID: HWID required'});
+if(hw!==ALLOWED_HWID)return res.status(403).json({success:false,message:'BLOCKED - WRONG HWID: Your hardware ID does not match the authorized device'});
+return res.json({success:true,message:'Access granted'});});
 
 // Log crack attempt - only requires app_secret (no owner key needed)
 // Supports both JSON and multipart/form-data
